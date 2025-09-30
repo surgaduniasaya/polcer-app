@@ -1,247 +1,303 @@
 'use server';
 
 import { createClient } from "@/lib/supabase/server";
+import { UserRole } from "@/types/supabase";
 import { redirect } from "next/navigation";
 import * as xlsx from 'xlsx';
 
-// Tipe untuk histori percakapan Gemini
-// Memastikan tipe ini cocok dengan struktur yang kita kirim dan terima dari API
+// ============================================================================
+// TYPE DEFINITIONS (Strictly Typed & Corrected)
+// ============================================================================
+
 interface GeminiMessagePart {
   text?: string;
-  functionCall?: {
-    name: string;
-    args: any;
-  };
-  functionResponse?: {
-    name: string;
-    response: any;
-  };
+  functionCall?: { name: string; args: Record<string, unknown>; };
+  functionResponse?: { name: string; response: FunctionResult; };
 }
-
 interface GeminiContent {
   role: 'user' | 'model';
   parts: GeminiMessagePart[];
 }
-
-// Tipe untuk histori percakapan di UI, sekarang dengan properti 'data' opsional
 interface Message {
   role: 'user' | 'assistant';
   content: string;
-  data?: any;
+  data?: unknown;
 }
+type FunctionResult = {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+};
+type UserDataFromExcel = {
+  email: string;
+  full_name: string;
+  phone_number?: string | null;
+  role: UserRole;
+  nim_or_nidn?: string | null;
+  nama_program_studi: string;
+  angkatan?: number | null;
+};
+type JurusanInsert = {
+  name: string;
+  kode_jurusan?: string;
+};
+type ProdiInsertArg = {
+  nama_jurusan: string;
+  name: string;
+  jenjang: string;
+};
 
-// Fungsi untuk logout pengguna
+
+// ============================================================================
+// CORE FUNCTIONS
+// ============================================================================
+
 export async function signOutUser() {
   const supabase = createClient();
   await supabase.auth.signOut();
   return redirect('/');
 }
 
-// Fungsi terpusat untuk memanggil Gemini API route
 async function callGemini(history: GeminiContent[]): Promise<GeminiMessagePart[]> {
   const apiUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/gemini`;
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ history }),
-  });
+  const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ history }) });
   if (!response.ok) {
-    const errorData = await response.json();
-    console.error("Error calling Gemini API:", errorData);
+    const errorData: { error?: string } = await response.json();
     throw new Error(`Error dari server AI: ${errorData.error || 'Terjadi kesalahan'}`);
   }
-  const data = await response.json();
+  const data: { parts: GeminiMessagePart[] } = await response.json();
   return data.parts;
 }
 
-// Fungsi utama untuk alur percakapan dengan AI
-export async function chatWithAdminAgent(prompt: string, history: Message[]) {
-  // 1. Ubah histori dari format UI ke format Gemini
+export async function chatWithAdminAgent(prompt: string, history: Message[]): Promise<{ success: boolean; message: string; data?: unknown }> {
   const fullHistory: GeminiContent[] = [
-    ...history.map(msg => ({
-      role: (msg.role === 'assistant' ? 'model' : 'user') as 'user' | 'model',
+    ...history.map((msg): GeminiContent => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content }]
     })),
     { role: 'user', parts: [{ text: prompt }] }
   ];
 
   try {
-    // 2. Panggil Gemini untuk mendapatkan instruksi
     const responseParts = await callGemini(fullHistory);
-    const functionCallPart = responseParts.find(part => part.functionCall);
+    const functionCalls = responseParts
+      .filter((part): part is { functionCall: { name: string; args: Record<string, unknown>; } } => !!part.functionCall)
+      .map(part => part.functionCall);
 
-    if (functionCallPart && functionCallPart.functionCall) {
-      const functionCall = functionCallPart.functionCall;
+    if (functionCalls.length > 0) {
       fullHistory.push({ role: 'model', parts: responseParts });
-
-      // 3. Jalankan fungsi di database
-      const functionResult = await executeDatabaseFunction(functionCall.name, functionCall.args);
-
-      // 4. Kirim hasil kembali ke Gemini untuk diformat
+      const functionResults = await Promise.all(functionCalls.map(call => executeDatabaseFunction(call.name, call.args)));
       fullHistory.push({
         role: 'user',
-        parts: [{ functionResponse: { name: functionCall.name, response: functionResult } }]
+        parts: functionCalls.map((call, index): GeminiMessagePart => ({
+          functionResponse: { name: call.name, response: functionResults[index] }
+        }))
       });
-
       const finalResponseParts = await callGemini(fullHistory);
-
-      // 5. Pisahkan teks dan data tabel
       const messageText = finalResponseParts.map(p => p.text).filter(Boolean).join('\n');
-      const dataForTable = functionResult.success ? (functionResult.data || null) : null;
-
-      return {
-        success: true,
-        message: messageText || "Berikut hasilnya.",
-        data: dataForTable
-      };
-
+      const combinedData = functionResults.reduce((acc: unknown[], result) => {
+        if (result.success && result.data && Array.isArray(result.data)) return acc.concat(result.data);
+        return acc;
+      }, []);
+      return { success: true, message: messageText, data: combinedData.length > 0 ? combinedData : null };
     } else if (responseParts[0]?.text) {
-      const combinedText = responseParts.map(part => part.text).join('');
-      return { success: true, message: combinedText };
+      return { success: true, message: responseParts.map(part => part.text).join('') };
     }
-
     return { success: false, message: "Respons dari AI tidak dapat dipahami." };
-  } catch (error: any) {
-    console.error('Error in chatWithAdminAgent:', error);
-    return { success: false, message: `Waduh, sepertinya terjadi sedikit gangguan di sistem. Error: ${error.message}` };
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan tidak diketahui';
+    console.error('Error in chatWithAdminAgent:', errorMessage);
+    return { success: false, message: `Waduh, terjadi error: ${errorMessage}` };
   }
 }
 
-// Tipe baru yang lebih fleksibel untuk hasil fungsi
-type FunctionResult = {
-  success: boolean;
-  data?: any;
-  error?: string;
-  downloadUrl?: string; // Menambahkan downloadUrl sebagai properti opsional
-};
-
-// "Router" untuk mengeksekusi fungsi database berdasarkan nama
-async function executeDatabaseFunction(name: string, args: any): Promise<FunctionResult> {
+async function executeDatabaseFunction(name: string, args: Record<string, unknown>): Promise<FunctionResult> {
   try {
     switch (name) {
-      case 'showUsers': {
-        const data = await showUsers(args.role);
-        return { success: true, data };
-      }
-      case 'getAddUserTemplate': {
-        return await getAddUserTemplate();
-      }
-      case 'addUsersFromFile':
-        return await addUsersFromFile(args.file_content_as_json);
-      default:
-        return { success: false, error: `Fungsi '${name}' tidak ditemukan.` };
+      case 'showUsers': return { success: true, data: await showUsers(args.role as UserRole) };
+      case 'getJurusanAndProdi': return { success: true, data: await getJurusanAndProdi() };
+      case 'getAddUserTemplate': return await getAddUserTemplate();
+      case 'addUsersFromFile': return await addUsersFromFile(args.file_content_as_json as string);
+      case 'addJurusan': return { success: true, data: await addJurusan(args.jurusan_data as JurusanInsert[]) };
+      case 'showJurusan': return { success: true, data: await showJurusan() };
+      case 'addProdi': return { success: true, data: await addProdi(args.prodi_data as ProdiInsertArg[]) };
+      case 'showProdi': return { success: true, data: await showProdi(args.nama_jurusan as string | undefined) };
+      default: return { success: false, error: `Fungsi '${name}' tidak ditemukan.` };
     }
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan tidak diketahui';
+    return { success: false, error: errorMessage };
   }
 }
 
-// Fungsi untuk mengambil data pengguna dari Supabase
-async function showUsers(role: 'dosen' | 'mahasiswa') {
+// ============================================================================
+// DATABASE HELPER FUNCTIONS (Strictly Typed & Corrected)
+// ============================================================================
+
+async function showUsers(role: UserRole) {
   const supabase = createClient();
   let query;
-
   if (role === 'dosen') {
     query = supabase.from('profiles').select(`full_name, email, dosen_details(nidn)`).eq('role', 'dosen');
-  } else if (role === 'mahasiswa') {
-    query = supabase.from('profiles').select(`full_name, email, mahasiswa_details(nim)`).eq('role', 'mahasiswa');
   } else {
-    throw new Error(`Peran '${role}' tidak valid.`);
+    query = supabase.from('profiles').select(`full_name, email, mahasiswa_details(nim)`).eq('role', 'mahasiswa');
   }
-
   const { data, error } = await query;
-  if (error) throw new Error(`Gagal mengambil data dari Supabase: ${error.message}`);
+  if (error) throw new Error(`Gagal mengambil data pengguna: ${error.message}`);
+  if (!data) return [];
 
-  return data.map((item: any) => ({
-    nama_lengkap: item.full_name,
-    email: item.email,
-    nidn_atau_nim: item.dosen_details?.nidn || item.mahasiswa_details?.nim || '-'
-  }));
+  return data.map((item: any) => {
+    let nidnOrNim = '-';
+    if (item.dosen_details && Array.isArray(item.dosen_details) && item.dosen_details.length > 0) {
+      nidnOrNim = item.dosen_details[0]?.nidn || '-';
+    } else if (item.mahasiswa_details && Array.isArray(item.mahasiswa_details) && item.mahasiswa_details.length > 0) {
+      nidnOrNim = item.mahasiswa_details[0]?.nim || '-';
+    }
+    return {
+      nama_lengkap: item.full_name,
+      email: item.email,
+      nidn_atau_nim: nidnOrNim
+    };
+  });
 }
 
-// Fungsi untuk menyediakan data template
 async function getAddUserTemplate(): Promise<FunctionResult> {
   const templateData = [
-    { email: 'mahasiswa@email.com', full_name: 'Nama Lengkap Mahasiswa', phone_number: '081234567890', role: 'mahasiswa', nim_or_nidn: 'A12345678', prodi_id: 'UUID_PRODI_DISINI', angkatan: 2024 },
-    { email: 'dosen@email.com', full_name: 'Nama Lengkap Dosen', phone_number: '089876543210', role: 'dosen', nim_or_nidn: '123456789', prodi_id: 'UUID_PRODI_DISINI', angkatan: '' }
+    { email: 'mahasiswa.baru@email.com', full_name: 'Budi Sanjaya', phone_number: '081234567890', role: 'mahasiswa' as UserRole, nim_or_nidn: 'A12345678', nama_program_studi: 'Teknik Informatika', angkatan: 2024 },
+    { email: 'dosen.baru@email.com', full_name: 'Dr. Siti Aminah', phone_number: '089876543210', role: 'dosen' as UserRole, nim_or_nidn: '123456789', nama_program_studi: 'Teknik Informatika', angkatan: null }
   ];
-  return { success: true, data: templateData, downloadUrl: '/api/template' };
+  return { success: true, data: templateData };
 }
 
-// Fungsi untuk menambahkan pengguna dari file Excel
 async function addUsersFromFile(fileContentAsJson: string): Promise<FunctionResult> {
   const supabase = createClient();
-  const users: any[] = JSON.parse(fileContentAsJson);
+  const { data: prodiList, error: prodiError } = await supabase.from('program_studi').select('id, name');
+  if (prodiError) throw new Error(`Tidak bisa mengambil daftar program studi: ${prodiError.message}`);
+  const prodiMap = new Map(prodiList.map(p => [p.name.toLowerCase(), p.id]));
+  const users: UserDataFromExcel[] = JSON.parse(fileContentAsJson);
   let successCount = 0;
   let errors: string[] = [];
-
   for (const user of users) {
-    if (!user.email || !user.full_name || !user.role || !user.prodi_id) {
-      errors.push(`Data tidak lengkap untuk baris dengan email: ${user.email || '(tidak ada email)'}. Pastikan email, nama, peran, dan ID prodi terisi.`);
-      continue;
+    const prodiName = user.nama_program_studi?.trim().toLowerCase();
+    if (!user.email || !user.full_name || !user.role || !prodiName) {
+      errors.push(`Data tidak lengkap di baris email: ${user.email || '(kosong)'}.`); continue;
     }
-
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles').insert({ email: user.email, full_name: user.full_name, phone_number: user.phone_number, role: user.role })
-      .select('id').single();
-
+    const prodiId = prodiMap.get(prodiName);
+    if (!prodiId) {
+      errors.push(`Program studi '${user.nama_program_studi}' untuk email ${user.email} tidak ditemukan.`); continue;
+    }
+    const { data: profile, error: profileError } = await supabase.from('profiles').insert({ email: user.email, full_name: user.full_name, phone_number: user.phone_number, role: user.role }).select('id').single();
     if (profileError) {
-      errors.push(`Gagal menambahkan profil untuk ${user.email}: ${profileError.message}`);
-      continue;
+      errors.push(`Gagal menambahkan profil untuk ${user.email}: ${profileError.message}`); continue;
     }
-
     if (user.role === 'mahasiswa') {
       if (!user.nim_or_nidn || !user.angkatan) {
-        errors.push(`NIM atau angkatan wajib diisi untuk mahasiswa ${user.email}. Proses dibatalkan untuk pengguna ini.`);
-        await supabase.from('profiles').delete().eq('id', profile.id);
-        continue;
+        errors.push(`NIM/Angkatan wajib untuk mahasiswa ${user.email}.`);
+        await supabase.from('profiles').delete().eq('id', profile.id); continue;
       }
-      const { error: detailError } = await supabase.from('mahasiswa_details').insert({ profile_id: profile.id, nim: user.nim_or_nidn, prodi_id: user.prodi_id, angkatan: user.angkatan });
+      const { error: detailError } = await supabase.from('mahasiswa_details').insert({ profile_id: profile.id, nim: user.nim_or_nidn, prodi_id: prodiId, angkatan: user.angkatan });
       if (detailError) {
-        errors.push(`Gagal menambahkan detail mahasiswa ${user.email}: ${detailError.message}. Profil dasar telah dihapus.`);
-        await supabase.from('profiles').delete().eq('id', profile.id);
-        continue;
+        errors.push(`Gagal detail mahasiswa ${user.email}: ${detailError.message}.`);
+        await supabase.from('profiles').delete().eq('id', profile.id); continue;
       }
     } else if (user.role === 'dosen') {
-      const { error: detailError } = await supabase.from('dosen_details').insert({ profile_id: profile.id, nidn: user.nim_or_nidn, prodi_id: user.prodi_id });
+      const { error: detailError } = await supabase.from('dosen_details').insert({ profile_id: profile.id, nidn: user.nim_or_nidn, prodi_id: prodiId });
       if (detailError) {
-        errors.push(`Gagal menambahkan detail dosen ${user.email}: ${detailError.message}. Profil dasar telah dihapus.`);
-        await supabase.from('profiles').delete().eq('id', profile.id);
-        continue;
+        errors.push(`Gagal detail dosen ${user.email}: ${detailError.message}.`);
+        await supabase.from('profiles').delete().eq('id', profile.id); continue;
       }
     }
     successCount++;
   }
-
-  return { success: true, data: { successCount, errors } };
+  return { success: true, data: { successCount, errors, totalRows: users.length } };
 }
 
-// Fungsi untuk memproses file Excel yang diunggah
+async function addJurusan(jurusanData: JurusanInsert[]) {
+  const supabase = createClient();
+  const { data, error } = await supabase.from('jurusan').insert(jurusanData).select();
+  if (error) throw new Error(`Gagal menambahkan jurusan: ${error.message}`);
+  return data;
+}
+async function showJurusan() {
+  const supabase = createClient();
+  const { data, error } = await supabase.from('jurusan').select('name, kode_jurusan');
+  if (error) throw new Error(`Gagal menampilkan jurusan: ${error.message}`);
+  return data;
+}
+
+async function addProdi(prodiData: ProdiInsertArg[]) {
+  const supabase = createClient();
+  const { data: jurusan, error: jurError } = await supabase.from('jurusan').select('id').eq('name', prodiData[0].nama_jurusan).single();
+  if (jurError || !jurusan) throw new Error(`Jurusan '${prodiData[0].nama_jurusan}' tidak ditemukan.`);
+  const dataToInsert = prodiData.map(p => ({ name: p.name, jenjang: p.jenjang, jurusan_id: jurusan.id }));
+  const { data, error } = await supabase.from('program_studi').insert(dataToInsert).select();
+  if (error) throw new Error(`Gagal menambahkan prodi: ${error.message}`);
+  return data;
+}
+
+async function showProdi(nama_jurusan?: string) {
+  const supabase = createClient();
+  let query = supabase.from('program_studi').select(`name, jenjang, jurusan(name)`);
+  if (nama_jurusan) {
+    query = query.eq('jurusan.name', nama_jurusan);
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(`Gagal menampilkan prodi: ${error.message}`);
+  if (!data) return [];
+
+  // PERBAIKAN FINAL: Lakukan mapping defensif tanpa casting 'as'
+  return data.map((item: any) => {
+    let jurusanName = 'N/A';
+    // Cek apakah 'jurusan' ada dan merupakan objek (bukan array)
+    if (item.jurusan && typeof item.jurusan === 'object' && !Array.isArray(item.jurusan)) {
+      jurusanName = item.jurusan.name ?? 'N/A';
+    }
+    return {
+      program_studi: item.name,
+      jenjang: item.jenjang,
+      jurusan: jurusanName
+    };
+  });
+}
+
+async function getJurusanAndProdi() {
+  const supabase = createClient();
+  const { data, error } = await supabase.from('jurusan').select(`name, program_studi(name)`);
+  if (error) throw new Error(`Gagal mengambil data jurusan & prodi: ${error.message}`);
+  if (!data) return [];
+
+  return data.flatMap((jurusan: any) =>
+    // Pastikan program_studi adalah array sebelum di-map
+    Array.isArray(jurusan.program_studi) ?
+      jurusan.program_studi.map((prodi: any) => ({
+        jurusan: jurusan.name,
+        program_studi: prodi.name
+      })) : []
+  );
+}
+
 export async function processExcelFile(formData: FormData) {
   const file = formData.get('file') as File;
   if (!file) {
     return { success: false, message: 'File tidak ditemukan.' };
   }
-
   try {
     const bytes = await file.arrayBuffer();
-    const workbook = xlsx.read(bytes, { type: "buffer" });
+    const workbook = xlsx.read(bytes);
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    const json = xlsx.utils.sheet_to_json(worksheet, {
-      header: ["email", "full_name", "phone_number", "role", "nim_or_nidn", "prodi_id", "angkatan"],
+    const json = xlsx.utils.sheet_to_json<UserDataFromExcel>(worksheet, {
+      header: ["email", "full_name", "phone_number", "role", "nim_or_nidn", "nama_program_studi", "angkatan"],
       range: 1
     });
-
-    const prompt = `Saya telah mengunggah file Excel untuk menambahkan pengguna. Ini kontennya dalam format JSON: ${JSON.stringify(json)}. Tolong panggil fungsi 'addUsersFromFile' dengan data ini.`;
-
-    // Mulai percakapan baru dengan AI untuk memproses file
+    const prompt = `Saya telah mengunggah file Excel untuk menambahkan pengguna. Ini kontennya: ${JSON.stringify(json)}. Tolong panggil fungsi 'addUsersFromFile'.`;
     return await chatWithAdminAgent(prompt, []);
-
-  } catch (error: any) {
-    return { success: false, message: `Gagal memproses file Excel: ${error.message}` };
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan tidak diketahui';
+    return { success: false, message: `Gagal memproses file Excel: ${errorMessage}` };
   }
 }
+
 
 
 

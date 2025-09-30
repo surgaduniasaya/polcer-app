@@ -4,50 +4,61 @@ const GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20';
 const API_KEY = process.env.GEMINI_API_KEY;
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${API_KEY}`;
 
-// System Prompt diperbarui untuk memformat template sebagai tabel markdown
 const systemPrompt = `
-Anda adalah "POLCER AI Agent", asisten AI yang ramah, menyenangkan, dan cerdas untuk admin Politeknik Negeri Pontianak.
-Gaya bicara Anda harus natural, jangan kaku seperti robot.
-Tugas utama Anda adalah membantu admin mengelola data dengan memanggil fungsi yang tersedia.
+Anda adalah "POLCER AI Agent", asisten AI yang cerdas, proaktif, dan ramah untuk admin Politeknik Negeri Pontianak.
+Gaya bicara Anda natural dan menyenangkan, gunakan emoji! 😉.
+Tugas utama Anda adalah mengelola SELURUH data di database POLNEP dengan memanggil fungsi yang tersedia (CRUD: Create, Read, Update, Delete).
 
-PENTING: Anda TIDAK boleh membuat tabel atau format data mentah dalam respons Anda.
-Tugas Anda adalah memberikan TEKS PENGANTAR yang ramah.
-Contoh: jika fungsi 'showUsers' mengembalikan data, respons Anda HANYA berupa teks seperti "Tentu, ini dia daftar dosen yang berhasil saya temukan:".
-Sistem di backend akan secara otomatis menampilkan data dalam format tabel setelah teks Anda.
-Jika fungsi mengembalikan data kosong atau error, berikan respons yang simpatik dan jelaskan situasinya.
+ALUR CERDAS:
+- Jika admin ingin menambahkan data (misal, pengguna), PERIKSA dulu data pendukungnya (misal, jurusan & prodi).
+- Jika data pendukung kosong, PANDU admin untuk menambahkannya terlebih dahulu.
+- Selalu konfirmasi ulang sebelum melakukan aksi hapus (delete).
+- Anda TIDAK membuat tabel, tugas Anda adalah memberikan TEKS PENGANTAR yang ramah. Backend akan menampilkan datanya.
+- Jika fungsi gagal, jelaskan masalahnya dengan simpatik dan tawarkan solusi.
 `;
 
 const tools = [
   {
     "function_declarations": [
+      // == FUNGSI PENGGUNA (PROFILES, MAHASISWA, DOSEN) ==
       {
         "name": "showUsers",
-        "description": "Menampilkan daftar pengguna (dosen atau mahasiswa) berdasarkan filter.",
-        "parameters": {
-          "type": "OBJECT",
-          "properties": { "role": { "type": "STRING", "description": "Peran pengguna, 'dosen' atau 'mahasiswa'." } },
-          "required": ["role"]
-        }
+        "description": "Menampilkan daftar pengguna (dosen atau mahasiswa).",
+        "parameters": { "type": "OBJECT", "properties": { "role": { "type": "STRING" } }, "required": ["role"] }
       },
       {
         "name": "getAddUserTemplate",
-        "description": "Memberikan template Excel untuk menambahkan pengguna. Fungsi ini akan mengembalikan contoh data dalam format JSON dan link unduhan. Panggil fungsi ini jika admin ingin menambahkan pengguna.",
+        "description": "Memberikan template Excel untuk menambahkan pengguna massal.",
         "parameters": { "type": "OBJECT", "properties": {} }
       },
       {
         "name": "addUsersFromFile",
-        "description": "Memproses file Excel yang diunggah oleh admin untuk menambahkan pengguna baru ke database.",
-        "parameters": {
-          "type": "OBJECT",
-          "properties": {
-            "file_content_as_json": {
-              "type": "STRING",
-              "description": "Konten file Excel yang telah diubah menjadi string JSON."
-            }
-          },
-          "required": ["file_content_as_json"]
-        }
+        "description": "Memproses file Excel untuk menambahkan banyak pengguna sekaligus.",
+        "parameters": { "type": "OBJECT", "properties": { "file_content_as_json": { "type": "STRING" } }, "required": ["file_content_as_json"] }
+      },
+      // == FUNGSI JURUSAN ==
+      {
+        "name": "addJurusan",
+        "description": "Menambahkan satu atau lebih jurusan baru.",
+        "parameters": { "type": "OBJECT", "properties": { "jurusan_data": { "type": "ARRAY", "items": { "type": "OBJECT", "properties": { "name": { "type": "STRING" }, "kode_jurusan": { "type": "STRING" } }, "required": ["name"] } } }, "required": ["jurusan_data"] }
+      },
+      {
+        "name": "showJurusan",
+        "description": "Menampilkan semua jurusan yang ada.",
+        "parameters": { "type": "OBJECT", "properties": {} }
+      },
+      // == FUNGSI PROGRAM STUDI ==
+      {
+        "name": "addProdi",
+        "description": "Menambahkan satu atau lebih program studi baru di bawah sebuah jurusan.",
+        "parameters": { "type": "OBJECT", "properties": { "prodi_data": { "type": "ARRAY", "items": { "type": "OBJECT", "properties": { "nama_jurusan": { "type": "STRING" }, "name": { "type": "STRING" }, "jenjang": { "type": "STRING" } }, "required": ["nama_jurusan", "name", "jenjang"] } } }, "required": ["prodi_data"] }
+      },
+      {
+        "name": "showProdi",
+        "description": "Menampilkan semua program studi, bisa difilter berdasarkan jurusan.",
+        "parameters": { "type": "OBJECT", "properties": { "nama_jurusan": { "type": "STRING" } } }
       }
+      // Tambahkan fungsi untuk Mata Kuliah dan Modul Ajar di sini jika diperlukan
     ]
   }
 ];
@@ -84,6 +95,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
+
+
+
+
+
+
 
 
 
