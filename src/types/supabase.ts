@@ -10,4 +10,7 @@ export interface Profile {
   role: UserRole;
   avatar_url?: string | null;
   created_at: string; // timestamptz
+  // Tambahan kolom baru
+  nim?: string | null; // Nomor Induk Mahasiswa (wajib jika role = 'mahasiswa')
+  nidn?: string | null; // Nomor Induk Dosen Nasional (opsional jika role = 'dosen')
 }

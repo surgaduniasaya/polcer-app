@@ -12,14 +12,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import { Bot, BrainCircuit, Loader2, LogOut, PanelLeft, Plus, Search, User } from 'lucide-react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Bot, BrainCircuit, Download, Loader2, LogOut, PanelLeft, Plus, User } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import ChatInputForm from './ChatInputForm';
-import { Input } from './ui/input';
 
+// Tipe Message diperbarui untuk menyertakan data tabel dan URL unduhan opsional
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  data?: any;
 }
 
 const getGreeting = () => {
@@ -52,8 +56,17 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
     const response = await chatWithAdminAgent(input, messages);
-    const assistantMessage: Message = { role: 'assistant', content: response.message };
-    setMessages(prev => [...prev, assistantMessage]);
+    if (response.success) {
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: response.message,
+        data: response.data // Menyimpan data tabel ke state
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } else {
+      const errorMessage: Message = { role: 'assistant', content: `Maaf, terjadi kesalahan: ${response.message}` };
+      setMessages(prev => [...prev, errorMessage]);
+    }
     setIsLoading(false);
   };
 
@@ -66,8 +79,13 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
     const formData = new FormData();
     formData.append('file', file);
     const result = await processExcelFile(formData);
-    const assistantMessage: Message = { role: 'assistant', content: result.message };
-    setMessages(prev => [...prev, assistantMessage]);
+    if (result.success) {
+      const assistantMessage: Message = { role: 'assistant', content: result.message, data: result.data };
+      setMessages(prev => [...prev, assistantMessage]);
+    } else {
+      const errorMessage: Message = { role: 'assistant', content: `Maaf, terjadi kesalahan: ${result.message}` };
+      setMessages(prev => [...prev, errorMessage]);
+    }
     setIsLoading(false);
     if (event.target) event.target.value = "";
   };
@@ -88,36 +106,19 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="flex flex-col w-72 p-0 bg-gray-50/95 backdrop-blur-sm border-r">
-            {/* --- BAGIAN HEADER BARU UNTUK BRANDING --- */}
             <div className="p-4 border-b flex items-center gap-3">
               <div className="p-1.5 bg-blue-100 rounded-lg">
                 <BrainCircuit className="h-6 w-6 text-blue-600" />
               </div>
               <h2 className="text-lg font-bold text-gray-800 tracking-tight">POLCER Agent</h2>
             </div>
-
             <div className='p-4 space-y-4'>
-              <Button className="w-full justify-start gap-2 bg-white hover:bg-gray-100 text-gray-800 border shadow-sm">
+              <Button onClick={() => setMessages([])} className="w-full justify-start gap-2 bg-white hover:bg-gray-100 text-gray-800 border shadow-sm">
                 <Plus size={18} />
                 New Chat
               </Button>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input placeholder="Search history..." className="pl-9 bg-white" />
-              </div>
             </div>
-
-            <div className="flex-1 overflow-y-auto px-4 py-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 px-2">Recent</p>
-              {/* Nanti di sini kita map riwayat chat asli */}
-              <a href="#" className="block p-2 rounded-lg hover:bg-gray-200/60 text-sm truncate text-gray-700">
-                Analisis Data Mahasiswa 2024
-              </a>
-              <a href="#" className="block p-2 rounded-lg hover:bg-gray-200/60 text-sm truncate text-gray-700">
-                Modul yang diupload minggu ini
-              </a>
-            </div>
-
+            {/* Sisa dari sidebar bisa ditambahkan di sini */}
             <div className="mt-auto border-t p-4">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -159,17 +160,53 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
         <>
           <main className="flex-1 overflow-y-auto p-4 space-y-6 pt-24 pb-32">
             {messages.map((msg, index) => (
-              <div key={index} className={`flex items-start gap-4 max-w-3xl mx-auto ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                {msg.role === 'assistant' && <div className="p-2 bg-gray-100 rounded-full"><Bot className="h-5 w-5 text-blue-600" /></div>}
-                <div className={`rounded-2xl px-4 py-2.5 max-w-[80%] ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}>
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+              <div key={index} className={`flex items-start gap-4 max-w-4xl mx-auto ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                {msg.role === 'assistant' && <div className="p-2 bg-gray-100 rounded-full flex-shrink-0 mt-1"><Bot className="h-5 w-5 text-blue-600" /></div>}
+
+                <div className={`rounded-2xl px-4 py-2.5 max-w-[85%] ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}>
+                  <div className="prose prose-sm max-w-none prose-p:my-2">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
+                  {/* ---- LOGIKA BARU UNTUK MERENDER TABEL ---- */}
+                  {msg.data && Array.isArray(msg.data) && msg.data.length > 0 && (
+                    <div className="mt-3">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            {Object.keys(msg.data[0]).map((key) => <TableHead key={key}>{key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TableHead>)}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {msg.data.map((row, rowIndex) => (
+                            <TableRow key={rowIndex}>
+                              {Object.values(row).map((cell: any, cellIndex: number) => (
+                                <TableCell key={cellIndex}>{cell !== null && cell !== undefined ? String(cell) : '-'}</TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {/* Tombol unduh jika ini adalah template */}
+                      {msg.content.toLowerCase().includes("template") && (
+                        <Button asChild variant="outline" className="mt-3 w-full sm:w-auto">
+                          <a href="/api/template" download>
+                            <Download className="mr-2 h-4 w-4" />
+                            Unduh Template Excel
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {msg.role === 'user' && <div className="p-2 bg-gray-100 rounded-full"><User className="h-5 w-5 text-gray-600" /></div>}
+
+                {msg.role === 'user' && <div className="p-2 bg-gray-100 rounded-full flex-shrink-0 mt-1"><User className="h-5 w-5 text-gray-600" /></div>}
               </div>
             ))}
             {isLoading && (
-              <div className="flex items-start gap-4 max-w-3xl mx-auto">
-                <div className="p-2 bg-gray-100 rounded-full"><Bot className="h-5 w-5 text-blue-600" /></div>
+              <div className="flex items-start gap-4 max-w-4xl mx-auto">
+                <div className="p-2 bg-gray-100 rounded-full flex-shrink-0 mt-1"><Bot className="h-5 w-5 text-blue-600" /></div>
                 <div className="rounded-2xl px-4 py-2.5 bg-gray-100 flex items-center"><Loader2 className="h-5 w-5 animate-spin text-gray-500" /></div>
               </div>
             )}
