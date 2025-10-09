@@ -1,89 +1,47 @@
-// Ini adalah tipe Enum kustom Anda dari SQL
-export type UserRole = 'admin' | 'dosen' | 'mahasiswa';
+import { Database } from "./database.types";
 
-// Tipe dasar untuk setiap tabel
-export interface Profile {
-  id: string; // uuid
-  email: string;
-  full_name: string;
-  phone_number?: string | null;
-  role: UserRole;
-  avatar_url?: string | null;
-  created_at: string; // timestamptz
-}
+// Mengambil tipe ENUM langsung dari hasil generate
+export type UserRole = Database['public']['Enums']['user_role'];
 
-export interface Jurusan {
-  id: string; // uuid
-  name: string;
-  kode_jurusan?: string | null;
-}
+// Mengambil tipe tabel dasar
+export type Profile = Database['public']['Tables']['profiles']['Row'];
+export type Jurusan = Database['public']['Tables']['jurusan']['Row'];
+export type ProgramStudi = Database['public']['Tables']['program_studi']['Row'];
+export type MahasiswaDetail = Database['public']['Tables']['mahasiswa_details']['Row'];
+export type DosenDetail = Database['public']['Tables']['dosen_details']['Row'];
+export type MataKuliah = Database['public']['Tables']['mata_kuliah']['Row'];
+export type ModulAjar = Database['public']['Tables']['modul_ajar']['Row'];
 
-export interface ProgramStudi {
-  id: string; // uuid
-  jurusan_id: string;
-  name: string;
-  jenjang: string;
-  kode_prodi_internal?: string | null;
-  admin_id?: string | null;
-}
+// ============================================================================
+// TIPE UNTUK RELASI (JOINS) - Cara yang Lebih Kuat & Otomatis
+// ============================================================================
 
-export interface MahasiswaDetail {
-  profile_id: string; // uuid
-  nim: string;
-  prodi_id: string;
-  angkatan: number;
-}
+// Helper untuk mengekstrak tipe relasi dari hasil generate
+export type Tables<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T]['Row'];
+export type Relations<T extends keyof Database['public']['Tables']> = keyof Database['public']['Tables'][T]['Relationships'];
 
-export interface DosenDetail {
-  profile_id: string; // uuid
-  nidn?: string | null;
-  prodi_id: string;
-}
-
-export interface MataKuliah {
-  id: string; // uuid
-  prodi_id: string;
-  name: string;
-  kode_mk?: string | null;
-  semester: number;
-}
-
-export interface ModulAjar {
-  id: string; // uuid
-  mata_kuliah_id: string;
-  dosen_id: string;
-  title: string;
-  file_url: string;
-  uploaded_at: string; // timestamptz
-  angkatan: number;
-}
-
-// Tipe untuk relasi (JOINs)
-// Ini adalah kunci untuk memperbaiki error Anda
-
-// ProgramStudi dengan data Jurusan
-export interface ProdiWithJurusan extends ProgramStudi {
+// Tipe ProgramStudi dengan Jurusan
+export type ProdiWithJurusan = ProgramStudi & {
   jurusan: Pick<Jurusan, 'name'> | null;
-}
+};
 
-// MataKuliah dengan data ProgramStudi
-export interface MataKuliahWithProdi extends MataKuliah {
+// Tipe MataKuliah dengan ProgramStudi
+export type MataKuliahWithProdi = MataKuliah & {
   program_studi: Pick<ProgramStudi, 'name'> | null;
-}
+};
 
-// ModulAjar dengan relasi ke MataKuliah dan Profile Dosen
-export interface ModulAjarWithRelations extends ModulAjar {
+// Tipe ModulAjar dengan relasinya
+export type ModulAjarWithRelations = ModulAjar & {
   mata_kuliah: Pick<MataKuliah, 'name' | 'kode_mk'> | null;
   profiles: Pick<Profile, 'full_name'> | null;
-}
+};
 
-// Profile Dosen dengan detailnya
-export interface DosenProfileWithDetails extends Profile {
+// Tipe Profile Dosen dengan detailnya
+export type DosenProfileWithDetails = Profile & {
   dosen_details: DosenDetail[] | null;
-}
+};
 
-// Profile Mahasiswa dengan detailnya
-export interface MahasiswaProfileWithDetails extends Profile {
+// Tipe Profile Mahasiswa dengan detailnya
+export type MahasiswaProfileWithDetails = Profile & {
   mahasiswa_details: MahasiswaDetail[] | null;
-}
-
+};

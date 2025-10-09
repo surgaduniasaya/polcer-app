@@ -15,24 +15,18 @@ export async function GET(req: Request) {
     }
 
     if (session) {
-      // PENGECEKAN KEAMANAN BARU
+      // Cek apakah profile sudah dibuat oleh admin
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id')
-        .eq('email', session.user.email)
+        .eq('id', session.user.id)
         .single();
 
-      // Jika profil tidak ditemukan, berarti pengguna belum didaftarkan oleh admin
-      if (!profile || profileError) {
-        // Hapus akun "hantu" dari auth.users
-        const { error: deleteError } = await supabase.auth.admin.deleteUser(session.user.id);
-        if (deleteError) {
-          console.error("Gagal menghapus pengguna tidak terdaftar:", deleteError.message);
-        }
-
-        // Logout pengguna dan arahkan dengan pesan error
-        await supabase.auth.signOut();
-        return NextResponse.redirect(new URL(`/?error=${encodeURIComponent('Akun Anda belum terdaftar oleh admin.')}`, req.url));
+      // Jika profil tidak ditemukan, arahkan ke halaman utama.
+      // Halaman utama akan menangani logika untuk menampilkan halaman "Menunggu Verifikasi"
+      if (profileError || !profile) {
+        // Alihkan ke halaman utama, sesi login tetap ada.
+        return NextResponse.redirect(new URL('/', req.url));
       }
     }
   }
