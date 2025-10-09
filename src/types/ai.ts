@@ -1,5 +1,5 @@
 // Tipe AI diperbarui untuk menangani alur konfirmasi
-export type AIModel = 'gemini' | 'llama';
+export type AIModel = 'gemini' | 'llama' | 'deepseek';
 
 export interface ToolCall {
   name: string;

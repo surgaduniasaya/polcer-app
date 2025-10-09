@@ -4,11 +4,12 @@ import { AIModel } from "@/types/ai";
 import { NextResponse } from 'next/server';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const LLAMA_API_URL = process.env.LLAMA_API_URL || 'http://localhost:11434/api/generate';
+const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'http://localhost:11434/api/generate';
 const LLAMA_MODEL_NAME = process.env.LLAMA_MODEL_NAME || 'llama3.1';
+const DEEPSEEK_MODEL_NAME = process.env.DEEPSEEK_MODEL_NAME || 'deepseek-r1:1.5b'; // Model baru
 
 // ============================================================================
-// PROMPT ENGINEERING & FUNCTION DEFINITIONS
+// PROMPT ENGINEERING & FUNCTION DEFINITIONS (Tidak ada perubahan di sini)
 // ============================================================================
 
 const tools = [
@@ -48,8 +49,7 @@ const tools = [
 
 const geminiSystemPrompt = `Anda adalah "POLCER AI Agent", asisten AI yang cerdas, proaktif, dan ramah untuk admin Politeknik Negeri Pontianak. Tugas utama Anda adalah menerjemahkan permintaan admin menjadi satu atau beberapa panggilan fungsi (tool calls) yang relevan dari daftar yang tersedia. Anda HARUS SELALU membalas dengan tool_calls jika memungkinkan. Jika tidak ada fungsi yang cocok, berikan respons teks singkat. Jangan pernah meminta konfirmasi, serahkan tugas itu ke backend.`;
 
-// FINAL, HIGH-PRECISION PROMPT FOR LLAMA (v2)
-const llamaSystemPrompt = `You are a precise and silent JSON API assistant. Your ONLY job is to analyze the user's request and the available tools, then generate a JSON object.
+const ollamaSystemPrompt = `You are a precise and silent JSON API assistant. Your ONLY job is to analyze the user's request and the available tools, then generate a JSON object.
 
 **RULES:**
 1.  **ALWAYS respond with a JSON object.** NO conversational text, NO apologies, NO explanations. Just JSON.
@@ -92,6 +92,7 @@ Now, analyze the following conversation and generate the JSON response.
 **YOUR JSON RESPONSE:**
 `;
 
+
 // ============================================================================
 // REQUEST HANDLERS
 // ============================================================================
@@ -126,22 +127,24 @@ async function handleGeminiRequest(history: any[]) {
   return candidate.content.parts;
 }
 
-async function handleLlamaRequest(history: any[]) {
+async function handleOllamaRequest(history: any[], model: 'llama' | 'deepseek') {
   const lastUserMessage = history[history.length - 1];
   const conversationHistory = history.slice(0, -1).map(h => `${h.role}: ${h.parts[0].text}`).join('\n');
 
-  const prompt = llamaSystemPrompt
+  const prompt = ollamaSystemPrompt
     .replace('{conversation_history}', conversationHistory || 'N/A')
     .replace('{user_prompt}', lastUserMessage.parts[0].text);
 
+  const modelName = model === 'llama' ? LLAMA_MODEL_NAME : DEEPSEEK_MODEL_NAME;
+
   const payload = {
-    model: LLAMA_MODEL_NAME,
+    model: modelName,
     prompt: prompt,
     format: 'json',
     stream: false,
   };
 
-  const response = await fetch(LLAMA_API_URL, {
+  const response = await fetch(OLLAMA_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -149,8 +152,8 @@ async function handleLlamaRequest(history: any[]) {
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error('Llama API Error:', errorBody);
-    throw new Error(`Llama API request failed with status ${response.status}`);
+    console.error('Ollama API Error:', errorBody);
+    throw new Error(`Ollama API request failed with status ${response.status}`);
   }
 
   const responseData = await response.json();
@@ -165,7 +168,7 @@ async function handleLlamaRequest(history: any[]) {
     // Fallback if JSON is valid but has wrong structure
     return [{ text: "Maaf, saya tidak yakin bagaimana harus merespons. Bisa coba lagi?" }];
   } catch (e) {
-    console.error("Llama response is not valid JSON:", responseData.response);
+    console.error("Ollama response is not valid JSON:", responseData.response);
     // Fallback if response is not JSON at all
     return [{ text: responseData.response || "Maaf, terjadi kesalahan saat memproses permintaan Anda." }];
   }
@@ -175,9 +178,9 @@ export async function POST(req: Request) {
   try {
     const { history, model } = await req.json() as { history: any[], model: AIModel };
     let parts;
-    if (model === 'llama') {
-      parts = await handleLlamaRequest(history);
-    } else {
+    if (model === 'llama' || model === 'deepseek') {
+      parts = await handleOllamaRequest(history, model);
+    } else { // Gemini
       parts = await handleGeminiRequest(history);
     }
     return NextResponse.json({ parts });
@@ -186,4 +189,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
-

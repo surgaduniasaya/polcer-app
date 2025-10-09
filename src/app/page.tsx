@@ -1,4 +1,4 @@
-import Landing from '@/components/Landing'; // Diubah dari LandingWrapper ke Landing
+import Landing from '@/components/Landing';
 import SuperAdminDashboard from '@/components/SuperAdminDashboard';
 import WaitingVerification from '@/components/WaitingVerification';
 import { createClient } from '@/lib/supabase/server';
@@ -7,39 +7,40 @@ export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
   const supabase = createClient();
-  const { data: { session } } = await supabase.auth.getSession();
 
-  // 1. Jika tidak ada sesi, tampilkan halaman landing
-  if (!session) {
-    // Memanggil Landing secara langsung, karena sudah mencakup SceneLayout
+  // PERBAIKAN: Menggunakan getUser() untuk keamanan sesuai rekomendasi Supabase
+  const { data: { user } } = await supabase.auth.getUser();
+
+  // 1. Kondisi: Tidak ada pengguna -> Tampilkan Halaman Landing
+  if (!user) {
     return <Landing />;
   }
 
-  // 2. Jika ada sesi, cek profilnya
+  // 2. Kondisi: Ada pengguna, cek profil di database
   const { data: profile } = await supabase
     .from('profiles')
     .select('role, full_name, avatar_url')
-    .eq('id', session.user.id)
+    .eq('id', user.id)
     .single();
 
-  // 3. Jika profil tidak ditemukan, tampilkan halaman "Menunggu Verifikasi"
-  if (!profile) {
-    return <WaitingVerification user={session.user} />;
+  // 3. Kondisi: Profil ditemukan, cek perannya
+  if (profile) {
+    // Gunakan peran baru 'super-admin'
+    if (profile.role === 'super-admin') {
+      const avatarUrl = profile.avatar_url || user.user_metadata?.avatar_url;
+      const userName = profile.full_name || user.email!;
+      return <SuperAdminDashboard userName={userName} avatarUrl={avatarUrl} />;
+    }
+
+    // TODO: Tambahkan halaman untuk peran ADMIN-PRODI, DOSEN, dan MAHASISWA di sini
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <h1>Selamat Datang, {profile.role}! Halaman Anda sedang dalam pengembangan.</h1>
+      </div>
+    );
   }
 
-  // 4. Jika profil adalah admin, tampilkan dashboard
-  if (profile.role === 'super-admin' || profile.role === 'admin-prodi') {
-    const avatarUrl = profile.avatar_url || session.user.user_metadata?.avatar_url;
-    const userName = profile.full_name || session.user.email!;
-    return <SuperAdminDashboard userName={userName} avatarUrl={avatarUrl} />;
-  }
-
-  // 5. TODO: Halaman untuk peran Dosen dan Mahasiswa
-  return (
-    <div className="flex items-center justify-center h-screen">
-      <h1>Selamat Datang, {profile.role}!</h1>
-      <p>Dashboard untuk peran ini sedang dalam pengembangan.</p>
-    </div>
-  );
+  // 4. Kondisi: Pengguna ada TAPI profil tidak ditemukan -> Tampilkan Halaman Menunggu Verifikasi
+  return <WaitingVerification user={user} />;
 }
 

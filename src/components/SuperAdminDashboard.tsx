@@ -8,17 +8,21 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AIModel, RichAIResponse, ToolCall } from '@/types/ai';
-import { AlertTriangle, Bot, BrainCircuit, Loader2, LogOut, PanelLeft, Plus, User } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Bot, BrainCircuit, Check, ChevronDown, Loader2, LogOut, PanelLeft, Plus, User } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ChatInputForm from './ChatInputForm';
+import DeepseekIcon from './icons/DeepseekIcon';
+import GeminiIcon from './icons/GeminiIcon';
 import LlamaIcon from './icons/LlamaIcon';
 
 interface Message {
@@ -27,7 +31,7 @@ interface Message {
   response?: RichAIResponse;
 }
 
-// Komponen baru untuk menampilkan prompt konfirmasi
+// Komponen dialog konfirmasi (tidak berubah)
 const ConfirmationDialog = ({ prompt, onConfirm, onCancel }: { prompt: string, onConfirm: () => void, onCancel: () => void }) => (
   <div className="mt-4 p-4 border-l-4 border-yellow-500 bg-yellow-50 rounded-r-lg">
     <div className="flex items-start gap-3">
@@ -52,14 +56,25 @@ const getGreeting = () => {
   return 'Selamat malam';
 };
 
+// Objek untuk data model
+const modelData = {
+  gemini: { name: 'Gemini 2.5', Icon: GeminiIcon },
+  llama: { name: 'Llama 3.1', Icon: LlamaIcon },
+  deepseek: { name: 'DeepSeek r1 1.5b', Icon: DeepseekIcon },
+};
+
+
 export default function SuperAdminDashboard({ userName, avatarUrl }: { userName: string, avatarUrl: string }) {
   const [isMounted, setIsMounted] = useState(false);
   const [greeting, setGreeting] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<AIModel>('gemini');
+  // Perubahan: Model default diubah menjadi 'llama'
+  const [selectedModel, setSelectedModel] = useState<AIModel>('llama');
   const [confirmation, setConfirmation] = useState<{ prompt: string; actions: ToolCall[] } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const CurrentModelIcon = useMemo(() => modelData[selectedModel].Icon, [selectedModel]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -68,18 +83,17 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, confirmation]);
+  }, [messages, confirmation, isLoading]);
 
   const handleSendMessage = async (input: string) => {
     if (!input.trim() || isLoading) return;
-    setConfirmation(null); // Hapus konfirmasi sebelumnya
+    setConfirmation(null);
     const userMessage: Message = { role: 'user', content: input };
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     const response = await chatWithAdminAgent(input, messages, selectedModel);
 
-    // LOGIKA BARU: Periksa apakah butuh konfirmasi
     if (response.needsConfirmation && response.confirmationPrompt && response.pendingActions) {
       setConfirmation({ prompt: response.confirmationPrompt, actions: response.pendingActions });
     } else {
@@ -95,13 +109,10 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
 
   const handleConfirmAction = async () => {
     if (!confirmation || isLoading) return;
-
     const actionsToExecute = confirmation.actions;
     setConfirmation(null);
     setIsLoading(true);
-
     const response = await executePendingActions(actionsToExecute);
-
     const assistantMessage: Message = {
       role: 'assistant',
       content: response.introText || response.error || "Aksi telah dieksekusi.",
@@ -121,7 +132,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
     setMessages(prev => [...prev, cancelMessage]);
   };
 
-  // ... (sisa fungsi, seperti handleFileChange, tetap sama)
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file || isLoading) return;
@@ -146,10 +156,10 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
   if (!isMounted) return null;
 
   return (
-    <div className="flex flex-col h-screen w-full bg-white font-sans">
-      <header className="fixed top-0 left-0 right-0 z-20 flex items-center justify-between p-4 bg-white/80 backdrop-blur-md border-b">
-        {/* ... (kode header tidak berubah) */}
-        <div className="flex items-center gap-2">
+    <div className="flex flex-col h-screen w-full bg-background font-sans">
+      <header className="fixed top-0 left-0 right-0 z-20 flex items-center justify-between p-3 bg-background/80 backdrop-blur-md">
+        <div className="flex items-center gap-1">
+          {/* Perubahan: Tombol sidebar sekarang selalu terlihat */}
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon">
@@ -157,6 +167,7 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="flex flex-col w-72 p-0 bg-gray-50/95 backdrop-blur-sm border-r">
+              {/* Sidebar Content */}
               <div className="p-4 border-b flex items-center gap-3">
                 <div className="p-1.5 bg-blue-100 rounded-lg">
                   <BrainCircuit className="h-6 w-6 text-blue-600" />
@@ -196,23 +207,64 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
               </div>
             </SheetContent>
           </Sheet>
+
+          {/* Perubahan: Model Selector dipindahkan ke sini */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2 text-base">
+                <CurrentModelIcon className="h-5 w-5" />
+                <span className="font-semibold">{modelData[selectedModel].name}</span>
+                <ChevronDown className="h-4 w-4 text-gray-500" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Pilih Model AI</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioGroup value={selectedModel} onValueChange={(value) => setSelectedModel(value as AIModel)}>
+                {(Object.keys(modelData) as AIModel[]).map((modelKey) => {
+                  const { name, Icon } = modelData[modelKey];
+                  return (
+                    <DropdownMenuRadioItem key={modelKey} value={modelKey} className="flex items-center gap-2">
+                      <Icon className="h-4 w-4" />
+                      <span>{name}</span>
+                      {selectedModel === modelKey && <Check className="ml-auto h-4 w-4" />}
+                    </DropdownMenuRadioItem>
+                  );
+                })}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        <div className="flex items-center gap-2 rounded-full border bg-gray-100 p-1">
-          <Button size="sm" variant={selectedModel === 'gemini' ? 'default' : 'ghost'} onClick={() => setSelectedModel('gemini')} className="rounded-full gap-2 text-xs h-8 px-3">
-            <BrainCircuit className="h-4 w-4" /> Gemini 2.5
-          </Button>
-          <Button size="sm" variant={selectedModel === 'llama' ? 'default' : 'ghost'} onClick={() => setSelectedModel('llama')} className="rounded-full gap-2 text-xs h-8 px-3">
-            <LlamaIcon className="h-4 w-4" /> Llama 3.1
-          </Button>
-        </div>
-        <div className="w-9 h-9" />
+
+
+        {/* User Menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Avatar className="h-9 w-9 cursor-pointer">
+              <AvatarImage src={avatarUrl} alt={userName} />
+              <AvatarFallback>{userInitials}</AvatarFallback>
+            </Avatar>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>{userName}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <form action={signOutUser} className="w-full">
+                <button type="submit" className="w-full text-left flex items-center">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  <span>Logout</span>
+                </button>
+              </form>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
 
       {messages.length === 0 && !confirmation ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 pt-16">
-          <div className="mb-8">
-            <h1 className="text-5xl font-bold text-gray-800">{greeting}, {userName}</h1>
-            <p className="text-lg text-gray-500 mt-2">Apa yang bisa saya bantu hari ini?</p>
+          <div className="mb-12">
+            <h1 className="text-6xl font-bold text-gray-800">{greeting}, {userName.split(' ')[0]}</h1>
+            <p className="text-xl text-gray-500 mt-4">How can I help you today?</p>
           </div>
           <ChatInputForm onSubmit={handleSendMessage} onFileChange={handleFileChange} isLoading={isLoading} />
         </div>
@@ -258,7 +310,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
               </div>
             ))}
 
-            {/* LOGIKA BARU: Tampilkan dialog konfirmasi di sini */}
             {confirmation && !isLoading && (
               <div className="flex items-start gap-4 max-w-4xl mx-auto">
                 <div className="p-2 bg-gray-100 rounded-full flex-shrink-0 mt-1"><Bot className="h-5 w-5 text-blue-600" /></div>
@@ -280,7 +331,7 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
             )}
             <div ref={messagesEndRef} />
           </main>
-          <footer className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-white to-transparent flex justify-center">
+          <footer className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background to-transparent flex justify-center">
             <ChatInputForm onSubmit={handleSendMessage} onFileChange={handleFileChange} isLoading={isLoading} />
           </footer>
         </>
