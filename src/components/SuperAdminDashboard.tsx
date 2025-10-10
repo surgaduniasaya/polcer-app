@@ -16,7 +16,7 @@ import {
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AIModel, RichAIResponse, ToolCall } from '@/types/ai';
-import { AlertTriangle, Bot, BrainCircuit, Check, ChevronDown, Loader2, LogOut, PanelLeft, Plus, User } from 'lucide-react';
+import { AlertTriangle, Bot, BrainCircuit, Check, ChevronDown, Loader2, LogOut, PanelLeft, Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -31,7 +31,7 @@ interface Message {
   response?: RichAIResponse;
 }
 
-// Komponen dialog konfirmasi (tidak berubah)
+// Komponen dialog konfirmasi
 const ConfirmationDialog = ({ prompt, onConfirm, onCancel }: { prompt: string, onConfirm: () => void, onCancel: () => void }) => (
   <div className="mt-4 p-4 border-l-4 border-yellow-500 bg-yellow-50 rounded-r-lg">
     <div className="flex items-start gap-3">
@@ -64,12 +64,11 @@ const modelData = {
 };
 
 
-export default function SuperAdminDashboard({ userName, avatarUrl }: { userName: string, avatarUrl: string }) {
+export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCount }: { userName: string, avatarUrl: string, unverifiedCount: number }) {
   const [isMounted, setIsMounted] = useState(false);
   const [greeting, setGreeting] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  // Perubahan: Model default diubah menjadi 'llama'
   const [selectedModel, setSelectedModel] = useState<AIModel>('llama');
   const [confirmation, setConfirmation] = useState<{ prompt: string; actions: ToolCall[] } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -159,7 +158,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
     <div className="flex flex-col h-screen w-full bg-background font-sans">
       <header className="fixed top-0 left-0 right-0 z-20 flex items-center justify-between p-3 bg-background/80 backdrop-blur-md">
         <div className="flex items-center gap-1">
-          {/* Perubahan: Tombol sidebar sekarang selalu terlihat */}
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon">
@@ -167,7 +165,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="flex flex-col w-72 p-0 bg-gray-50/95 backdrop-blur-sm border-r">
-              {/* Sidebar Content */}
               <div className="p-4 border-b flex items-center gap-3">
                 <div className="p-1.5 bg-blue-100 rounded-lg">
                   <BrainCircuit className="h-6 w-6 text-blue-600" />
@@ -185,7 +182,7 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
                   <DropdownMenuTrigger asChild>
                     <div className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-200/60">
                       <Avatar className="h-8 w-8">
-                        <AvatarImage src={avatarUrl} alt={userName} />
+                        <AvatarImage key={avatarUrl} src={avatarUrl} alt={userName} />
                         <AvatarFallback>{userInitials}</AvatarFallback>
                       </Avatar>
                       <span className="font-semibold text-sm truncate text-gray-800">{userName}</span>
@@ -208,7 +205,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
             </SheetContent>
           </Sheet>
 
-          {/* Perubahan: Model Selector dipindahkan ke sini */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="flex items-center gap-2 text-base">
@@ -236,12 +232,10 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
           </DropdownMenu>
         </div>
 
-
-        {/* User Menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Avatar className="h-9 w-9 cursor-pointer">
-              <AvatarImage src={avatarUrl} alt={userName} />
+              <AvatarImage key={avatarUrl} src={avatarUrl} alt={userName} />
               <AvatarFallback>{userInitials}</AvatarFallback>
             </Avatar>
           </DropdownMenuTrigger>
@@ -264,7 +258,13 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
         <div className="flex-1 flex flex-col items-center justify-center text-center px-4 pt-16">
           <div className="mb-12">
             <h1 className="text-6xl font-bold text-gray-800">{greeting}, {userName.split(' ')[0]}</h1>
-            <p className="text-xl text-gray-500 mt-4">How can I help you today?</p>
+            {unverifiedCount > 0 ? (
+              <p className="text-xl text-amber-600 mt-4 font-medium">
+                Ada {unverifiedCount} pengguna baru yang menunggu verifikasi Anda.
+              </p>
+            ) : (
+              <p className="text-xl text-gray-500 mt-4">How can I help you today?</p>
+            )}
           </div>
           <ChatInputForm onSubmit={handleSendMessage} onFileChange={handleFileChange} isLoading={isLoading} />
         </div>
@@ -306,7 +306,14 @@ export default function SuperAdminDashboard({ userName, avatarUrl }: { userName:
                     </div>
                   )}
                 </div>
-                {msg.role === 'user' && <div className="p-2 bg-gray-100 rounded-full flex-shrink-0 mt-1"><User className="h-5 w-5 text-gray-600" /></div>}
+                {msg.role === 'user' && (
+                  <div className="flex-shrink-0 mt-1">
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage key={avatarUrl} src={avatarUrl} alt={userName} />
+                      <AvatarFallback>{userInitials}</AvatarFallback>
+                    </Avatar>
+                  </div>
+                )}
               </div>
             ))}
 

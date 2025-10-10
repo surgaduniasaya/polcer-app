@@ -3,44 +3,58 @@ import SuperAdminDashboard from '@/components/SuperAdminDashboard';
 import WaitingVerification from '@/components/WaitingVerification';
 import { createClient } from '@/lib/supabase/server';
 
-export const dynamic = 'force-dynamic';
-
 export default async function HomePage() {
   const supabase = createClient();
-
-  // PERBAIKAN: Menggunakan getUser() untuk keamanan sesuai rekomendasi Supabase
   const { data: { user } } = await supabase.auth.getUser();
 
-  // 1. Kondisi: Tidak ada pengguna -> Tampilkan Halaman Landing
   if (!user) {
     return <Landing />;
   }
 
-  // 2. Kondisi: Ada pengguna, cek profil di database
+  // Cek apakah profil pengguna sudah ada
   const { data: profile } = await supabase
     .from('profiles')
     .select('role, full_name, avatar_url')
     .eq('id', user.id)
     .single();
 
-  // 3. Kondisi: Profil ditemukan, cek perannya
-  if (profile) {
-    // Gunakan peran baru 'super-admin'
-    if (profile.role === 'super-admin') {
-      const avatarUrl = profile.avatar_url || user.user_metadata?.avatar_url;
-      const userName = profile.full_name || user.email!;
-      return <SuperAdminDashboard userName={userName} avatarUrl={avatarUrl} />;
-    }
-
-    // TODO: Tambahkan halaman untuk peran ADMIN-PRODI, DOSEN, dan MAHASISWA di sini
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <h1>Selamat Datang, {profile.role}! Halaman Anda sedang dalam pengembangan.</h1>
-      </div>
-    );
+  // Jika tidak ada profil, tampilkan halaman "Menunggu Verifikasi"
+  if (!profile) {
+    return <WaitingVerification email={user.email || ''} />;
   }
 
-  // 4. Kondisi: Pengguna ada TAPI profil tidak ditemukan -> Tampilkan Halaman Menunggu Verifikasi
-  return <WaitingVerification user={user} />;
+  // Jika pengguna adalah admin, lanjutkan ke dashboard
+  if (profile.role === 'super-admin' || profile.role === 'admin-prodi') {
+    const avatarUrl = profile.avatar_url || user.user_metadata?.avatar_url;
+    const userName = profile.full_name || user.email!;
+
+    // -- LOGIKA BARU: Hitung pengguna yang belum diverifikasi --
+    let unverifiedUsersCount = 0;
+    if (profile.role === 'super-admin') {
+      const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+      if (authError) {
+        console.error("Error fetching auth users:", authError);
+      } else {
+        const { data: profiles, error: profilesError } = await supabase.from('profiles').select('id');
+        if (profilesError) {
+          console.error("Error fetching profiles:", profilesError);
+        } else {
+          const profileIds = new Set(profiles.map(p => p.id));
+          unverifiedUsersCount = authUsers.users.filter(u => !profileIds.has(u.id)).length;
+        }
+      }
+    }
+    // ---------------------------------------------------------
+
+    return <SuperAdminDashboard userName={userName} avatarUrl={avatarUrl} unverifiedCount={unverifiedUsersCount} />;
+  }
+
+  // Halaman untuk peran lain (dosen, mahasiswa)
+  return (
+    <div className="flex items-center justify-center h-screen">
+      <h1>Selamat Datang, {profile.role}!</h1>
+      <p>(Halaman untuk peran Anda sedang dalam pengembangan)</p>
+    </div>
+  );
 }
 

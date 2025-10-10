@@ -9,7 +9,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { createClient } from '@/lib/supabase/client';
-import type { User } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 // Impor ikon Clock dan LogOut
 import { Clock, LogOut } from 'lucide-react';
@@ -22,7 +21,7 @@ async function signOut() {
   window.location.href = '/';
 }
 
-export default function WaitingVerification({ user }: { user: User }) {
+export default function WaitingVerification({ email }: { email: string }) {
   const [isClient, setIsClient] = useState(false);
   useEffect(() => {
     setIsClient(true);
@@ -52,7 +51,7 @@ export default function WaitingVerification({ user }: { user: User }) {
               Menunggu Verifikasi Admin
             </CardTitle>
             <CardDescription className="text-gray-600 pt-2">
-              Akun Anda dengan email <span className="font-semibold">{user.email}</span> telah berhasil login, namun belum diaktifkan oleh admin.
+              Akun Anda dengan email <span className="font-semibold">{email}</span> telah berhasil login, namun belum diaktifkan oleh admin.
             </CardDescription>
           </CardHeader>
           <CardContent>
