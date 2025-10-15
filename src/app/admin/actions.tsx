@@ -71,9 +71,13 @@ export async function chatWithAdminAgent(prompt: string, history: Message[], mod
 
   try {
     const responseParts = await callAI(fullHistory, model);
+    // PERBAIKAN: Filter tool calls yang tidak valid sebelum diproses
     const functionCalls = responseParts
-      .filter((part): part is { functionCall: { name: string; args: Record<string, unknown>; } } => !!part.functionCall)
-      .map(part => part.functionCall as ToolCall);
+      .map(part => part.functionCall)
+      .filter(
+        (call): call is ToolCall =>
+          call != null && typeof call.name === 'string' && typeof call.args === 'object'
+      );
 
     if (functionCalls.length > 0) {
       const destructiveCall = functionCalls.find(call => call.name.startsWith('delete') || call.name.startsWith('update'));
@@ -196,6 +200,10 @@ async function executeDatabaseFunction(name: string, args: Record<string, unknow
       case 'deleteMataKuliah': return { success: true, data: await deleteMataKuliah(args.kode_mk as string) };
       case 'deleteModulAjar': return { success: true, data: await deleteModulAjar(args.id as string) };
       case 'deleteUserByNim': return { success: true, data: await deleteUserByNim(args.nim as string) };
+      case 'deleteDosenByNidn': return { success: true, data: await deleteDosenByNidn(args.nidn as string) };
+      case 'assignDosenToMataKuliah': return { success: true, data: await assignDosenToMataKuliah(args.email_dosen as string, args.kode_mk as string) };
+      case 'showDosenMataKuliah': return { success: true, data: await showDosenMataKuliah(args.email_dosen as string | undefined, args.kode_mk as string | undefined) };
+      case 'unassignDosenFromMataKuliah': return { success: true, data: await unassignDosenFromMataKuliah(args.email_dosen as string, args.kode_mk as string) };
       case 'getDatabaseSchema': return { success: true, data: await getDatabaseSchema() };
       case 'checkTableCounts': return { success: true, data: await checkTableCounts() };
       case 'getAddUserTemplate': return await getAddUserTemplate();
@@ -212,21 +220,26 @@ async function executeDatabaseFunction(name: string, args: Record<string, unknow
 // ============================================================================
 
 // --- CREATE ---
-async function addJurusan(jurusanData: JurusanInsert[]) {
+// --- CREATE ---
+async function addJurusan(jurusanData: JurusanInsert | JurusanInsert[]) {
   const supabase = createClient();
-  const { data, error } = await supabase.from('jurusan').insert(jurusanData).select('name');
+  // PERBAIKAN: Ubah input menjadi array jika bukan array
+  const dataAsArray = Array.isArray(jurusanData) ? jurusanData : [jurusanData];
+  const { data, error } = await supabase.from('jurusan').insert(dataAsArray).select('name');
   if (error) throw error;
   return [{ message: `${data.length} jurusan berhasil ditambahkan.` }];
 }
 
-async function addProdi(prodiData: ProdiInsertArg[]) {
+async function addProdi(prodiData: ProdiInsertArg | ProdiInsertArg[]) {
   const supabase = createClient();
-  const jurusanNames = [...new Set(prodiData.map(p => p.nama_jurusan))];
+  // PERBAIKAN: Ubah input menjadi array jika bukan array
+  const dataAsArray = Array.isArray(prodiData) ? prodiData : [prodiData];
+  const jurusanNames = [...new Set(dataAsArray.map(p => p.nama_jurusan))];
   const { data: jurusans, error: jurError } = await supabase.from('jurusan').select('id, name').in('name', jurusanNames);
   if (jurError) throw jurError;
   const jurusanMap = new Map(jurusans.map(j => [j.name, j.id]));
 
-  const dataToInsert = prodiData.map(p => {
+  const dataToInsert = dataAsArray.map(p => {
     const jurusan_id = jurusanMap.get(p.nama_jurusan);
     if (!jurusan_id) throw new Error(`Jurusan '${p.nama_jurusan}' tidak ditemukan.`);
     return { name: p.name, jenjang: p.jenjang, jurusan_id, kode_prodi_internal: p.kode_prodi_internal };
@@ -237,14 +250,16 @@ async function addProdi(prodiData: ProdiInsertArg[]) {
   return [{ message: `${data.length} program studi berhasil ditambahkan.` }];
 }
 
-async function addMataKuliah(matkulData: MataKuliahInsertArg[]) {
+async function addMataKuliah(matkulData: MataKuliahInsertArg | MataKuliahInsertArg[]) {
   const supabase = createClient();
-  const prodiNames = [...new Set(matkulData.map(mk => mk.nama_prodi))];
+  // PERBAIKAN: Ubah input menjadi array jika bukan array
+  const dataAsArray = Array.isArray(matkulData) ? matkulData : [matkulData];
+  const prodiNames = [...new Set(dataAsArray.map(mk => mk.nama_prodi))];
   const { data: prodis, error: prodiError } = await supabase.from('program_studi').select('id, name').in('name', prodiNames);
   if (prodiError) throw prodiError;
   const prodiMap = new Map(prodis.map(p => [p.name, p.id]));
 
-  const dataToInsert = matkulData.map(mk => {
+  const dataToInsert = dataAsArray.map(mk => {
     const prodi_id = prodiMap.get(mk.nama_prodi);
     if (!prodi_id) throw new Error(`Program Studi '${mk.nama_prodi}' tidak ditemukan.`);
     return { prodi_id, name: mk.name, kode_mk: mk.kode_mk, semester: mk.semester };
@@ -508,6 +523,80 @@ async function deleteUserByNim(nim: string) {
   const { error: profileError } = await supabase.from('profiles').delete().eq('id', detail.profile_id);
   if (profileError) throw profileError;
   return [{ message: `Mahasiswa dengan NIM '${nim}' berhasil dihapus.` }];
+}
+
+async function deleteDosenByNidn(nidn: string) {
+  const supabase = createClient();
+  const { data: detail, error: detailError } = await supabase.from('dosen_details').delete().eq('nidn', nidn).select('profile_id').single();
+  if (detailError || !detail) throw new Error(`Dosen dengan NIDN '${nidn}' tidak ditemukan.`);
+  const { error: profileError } = await supabase.from('profiles').delete().eq('id', detail.profile_id);
+  if (profileError) throw profileError;
+  return [{ message: `Dosen dengan NIDN '${nidn}' berhasil dihapus.` }];
+}
+
+
+// --- RELASI DOSEN & MATA KULIAH ---
+
+async function assignDosenToMataKuliah(email_dosen: string, kode_mk: string) {
+  const supabase = createClient();
+  const { data: dosen, error: dosenError } = await supabase.from('profiles').select('id').eq('email', email_dosen).eq('role', 'dosen').single();
+  if (dosenError || !dosen) throw new Error(`Dosen dengan email '${email_dosen}' tidak ditemukan.`);
+
+  const { data: matkul, error: mkError } = await supabase.from('mata_kuliah').select('id').eq('kode_mk', kode_mk).single();
+  if (mkError || !matkul) throw new Error(`Mata kuliah dengan kode '${kode_mk}' tidak ditemukan.`);
+
+  const { error } = await supabase.from('dosen_mata_kuliah').insert({ dosen_profile_id: dosen.id, mata_kuliah_id: matkul.id });
+  if (error) throw error;
+
+  return [{ message: `Dosen '${email_dosen}' berhasil ditugaskan ke mata kuliah '${kode_mk}'.` }];
+}
+
+async function showDosenMataKuliah(email_dosen?: string, kode_mk?: string) {
+  const supabase = createClient();
+  let query = supabase.from('dosen_mata_kuliah').select(`
+    profiles (full_name, email),
+    mata_kuliah (name, kode_mk)
+  `);
+
+  if (email_dosen) {
+    const { data: dosen } = await supabase.from('profiles').select('id').eq('email', email_dosen).single();
+    if (dosen) query = query.eq('dosen_profile_id', dosen.id);
+    else return [];
+  }
+  if (kode_mk) {
+    const { data: mk } = await supabase.from('mata_kuliah').select('id').eq('kode_mk', kode_mk).single();
+    if (mk) query = query.eq('mata_kuliah_id', mk.id);
+    else return [];
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  // Membersihkan struktur data agar mudah dibaca
+  return (data || []).map(item => ({
+    "Nama Dosen": (item.profiles as any)?.full_name || 'N/A',
+    "Email Dosen": (item.profiles as any)?.email || 'N/A',
+    "Mata Kuliah": (item.mata_kuliah as any)?.name || 'N/A',
+    "Kode MK": (item.mata_kuliah as any)?.kode_mk || 'N/A',
+  }));
+}
+
+async function unassignDosenFromMataKuliah(email_dosen: string, kode_mk: string) {
+  const supabase = createClient();
+  const { data: dosen, error: dosenError } = await supabase.from('profiles').select('id').eq('email', email_dosen).eq('role', 'dosen').single();
+  if (dosenError || !dosen) throw new Error(`Dosen dengan email '${email_dosen}' tidak ditemukan.`);
+
+  const { data: matkul, error: mkError } = await supabase.from('mata_kuliah').select('id').eq('kode_mk', kode_mk).single();
+  if (mkError || !matkul) throw new Error(`Mata kuliah dengan kode '${kode_mk}' tidak ditemukan.`);
+
+  const { error } = await supabase.from('dosen_mata_kuliah')
+    .delete()
+    .eq('dosen_profile_id', dosen.id)
+    .eq('mata_kuliah_id', matkul.id);
+
+  if (error) throw error;
+
+  return [{ message: `Tugas dosen '${email_dosen}' dari mata kuliah '${kode_mk}' berhasil dihapus.` }];
 }
 
 // --- UTILS ---
