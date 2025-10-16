@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from "@/lib/supabase/server";
-import { AIModel, DataTable, RichAIResponse, ToolCall } from "@/types/ai";
+import { AIModel, RichAIResponse, ToolCall } from "@/types/ai";
 import {
   DosenProfileWithDetails,
   MahasiswaProfileWithDetails,
@@ -11,32 +11,28 @@ import {
   UserRole,
 } from "@/types/supabase";
 import { redirect } from "next/navigation";
-import * as xlsx from 'xlsx';
 
 // ============================================================================
-// TYPE DEFINITIONS (STRICTLY TYPED)
+// TYPE DEFINITIONS
 // ============================================================================
 interface GeminiMessagePart { text?: string; functionCall?: { name: string; args: Record<string, unknown>; }; }
 interface GeminiContent { role: 'user' | 'model'; parts: GeminiMessagePart[]; }
 interface Message { role: 'user' | 'assistant'; content: string; response?: RichAIResponse; }
 type FunctionResult = { success: boolean; data?: unknown; error?: string; };
 
-// Input types for functions
 type UserDataFromExcel = { email: string; full_name: string; phone_number?: string | null; role: UserRole; nim_or_nidn?: string | null; nama_program_studi: string; angkatan?: number | null; };
 type JurusanInsert = { name: string; kode_jurusan?: string; };
 type ProdiInsertArg = { nama_jurusan: string; name: string; jenjang: string; kode_prodi_internal?: string; };
 type MataKuliahInsertArg = { nama_prodi: string; name: string; kode_mk?: string; semester: number; };
 type ModulAjarInsertArg = { kode_mk: string; email_dosen: string; title: string; file_url: string; angkatan: number; };
 
-// Update types for functions
 type JurusanUpdate = Partial<JurusanInsert>;
 type ProdiUpdateArg = Partial<ProdiInsertArg>;
 type MataKuliahUpdateArg = Partial<MataKuliahInsertArg>;
 type ModulAjarUpdate = Partial<Omit<ModulAjarInsertArg, 'kode_mk' | 'email_dosen'>>;
 
-
 // ============================================================================
-// CORE AI & ORCHESTRATION
+// CORE AI & REASONING LOOP
 // ============================================================================
 
 export async function signOutUser() {
@@ -45,12 +41,12 @@ export async function signOutUser() {
   return redirect('/');
 }
 
-async function callAI(history: GeminiContent[], model: AIModel): Promise<GeminiMessagePart[]> {
+async function callAI(history: GeminiContent[], model: AIModel, systemPrompt: string): Promise<GeminiMessagePart[]> {
   const apiUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/ai`;
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ history, model })
+    body: JSON.stringify({ history, model, systemPrompt })
   });
   if (!response.ok) {
     const errorData: { error?: string } = await response.json();
@@ -61,129 +57,100 @@ async function callAI(history: GeminiContent[], model: AIModel): Promise<GeminiM
 }
 
 export async function chatWithAdminAgent(prompt: string, history: Message[], model: AIModel): Promise<RichAIResponse> {
-  const fullHistory: GeminiContent[] = [
-    ...history.filter(m => m.content).map((msg): GeminiContent => ({
+  const supabase = createClient();
+  let observation: string | null = "No action has been taken yet. You are at the start of the conversation.";
+  const MAX_TURNS = 5;
+
+  const fullHistory: Message[] = [...history, { role: 'user', content: prompt }];
+
+  for (let i = 0; i < MAX_TURNS; i++) {
+    const currentContextQuery = i === 0 ? prompt : (observation || prompt);
+
+    const embeddingResponse = await supabase.functions.invoke('embedding-generator', {
+      headers: { 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY!}` },
+      body: { text: currentContextQuery },
+    });
+    if (embeddingResponse.error) throw new Error(`Embedding failed: ${embeddingResponse.error.message}`);
+    const { embedding } = embeddingResponse.data;
+
+    const { data: sections, error: rpcError } = await supabase.rpc('match_schema_sections', {
+      query_embedding: embedding, match_threshold: 0.75, match_count: 4,
+    });
+    if (rpcError) throw new Error(`RPC failed: ${rpcError.message}`);
+
+    const schemaContext = sections?.map((s: any) => s.content).join('\n---\n') || "No relevant schema context found.";
+
+    const systemPrompt = `
+    Anda adalah POLCER AI Agent, asisten ahli untuk database Politeknik Negeri Pontianak. Tujuan Anda adalah memenuhi permintaan pengguna dengan memanggil satu atau lebih fungsi.
+    
+    **PROSES PENALARAN (SIKLUS NALAR -> AKSI -> OBSERVASI):**
+    1.  **NALAR**: Berdasarkan seluruh riwayat percakapan dan "OBSERVASI" dari aksi sebelumnya, formulasikan sebuah rencana dalam pikiran Anda.
+    2.  **AKSI**: Pilih **SATU** fungsi dari daftar 'tools' yang tersedia untuk dieksekusi. Respons Anda HARUS berupa satu objek JSON yang valid untuk panggilan fungsi tersebut.
+    3.  **TUNGGU OBSERVASI**: Setelah Anda bertindak, sistem akan memberikan hasil (sukses atau error) sebagai "OBSERVASI" baru untuk siklus berikutnya. Gunakan observasi ini untuk menentukan langkah selanjutnya.
+    4.  **SELESAI/BERTANYA**: Jika Anda sudah memiliki semua informasi dan tugas selesai, atau jika Anda memerlukan informasi lebih lanjut dari pengguna setelah menganalisis observasi, akhiri siklus dengan memberikan respons dalam format teks biasa.
+    
+    **KONTEKS SKEMA DATABASE (DARI MEMORI ANDA):**
+    ${schemaContext}
+    
+    **OBSERVASI DARI AKSI SEBELUMNYA:**
+    ${observation}
+    `;
+
+    const apiHistory: GeminiContent[] = fullHistory.map((msg) => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content }]
-    })),
-    { role: 'user', parts: [{ text: prompt }] }
-  ];
+    }));
 
-  try {
-    const responseParts = await callAI(fullHistory, model);
-    // PERBAIKAN: Filter tool calls yang tidak valid sebelum diproses
-    const functionCalls = responseParts
-      .map(part => part.functionCall)
-      .filter(
-        (call): call is ToolCall =>
-          call != null && typeof call.name === 'string' && typeof call.args === 'object'
-      );
+    const responseParts = await callAI(apiHistory, model, systemPrompt);
+    const functionCallPart = responseParts.find(p => p.functionCall);
+    const textPart = responseParts.find(p => p.text);
 
-    if (functionCalls.length > 0) {
-      const destructiveCall = functionCalls.find(call => call.name.startsWith('delete') || call.name.startsWith('update'));
-      if (destructiveCall) {
-        return {
-          success: true,
-          needsConfirmation: true,
-          confirmationPrompt: `Saya mendeteksi ada aksi berbahaya: \`${destructiveCall.name}\`. Apakah Anda yakin ingin melanjutkan semua aksi yang direncanakan?`,
-          pendingActions: functionCalls,
-        };
-      }
-      return await executePendingActions(functionCalls);
-    } else if (responseParts[0]?.text) {
-      return { success: true, introText: responseParts[0].text };
-    }
-    return { success: false, error: "Respons dari AI tidak dapat dipahami." };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan';
-    console.error('Error in chatWithAdminAgent:', errorMessage);
-    return { success: false, error: `Waduh, terjadi error: ${errorMessage}` };
-  }
-}
+    if (functionCallPart?.functionCall) {
+      const toolCall = functionCallPart.functionCall as ToolCall;
 
-export async function executePendingActions(actions: ToolCall[]): Promise<RichAIResponse> {
-  const tables: DataTable[] = [];
-  const results: string[] = [];
-  let allSuccess = true;
-  let errors: string[] = [];
+      const result = await executeDatabaseFunction(toolCall.name, toolCall.args);
 
-  for (const call of actions) {
-    const result = await executeDatabaseFunction(call.name, call.args);
-    if (result.success) {
-      const data = result.data;
-      if (Array.isArray(data) && data.length > 0) {
-        if (data[0] && typeof data[0] === 'object' && 'message' in data[0]) {
-          data.forEach(item => results.push((item as { message: string }).message));
-        } else {
-          tables.push({
-            title: call.name.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).replace("Show ", "Daftar "),
-            data: data
-          });
+      // Update history untuk siklus berikutnya
+      fullHistory.push({
+        role: 'assistant',
+        content: `(Memanggil fungsi ${toolCall.name} dengan argumen ${JSON.stringify(toolCall.args)})`,
+      });
+
+      if (result.success) {
+        const resultData = result.data;
+        if (Array.isArray(resultData) && resultData.length > 0 && resultData[0]?.message) {
+          return { success: true, introText: resultData[0].message };
         }
-      } else if (data && typeof data === 'object' && 'message' in data) {
-        results.push((data as { message: string }).message);
-      } else if (Array.isArray(data) && data.length === 0) {
-        results.push(`Tidak ada data ditemukan untuk \`${call.name}\`.`);
+        if (Array.isArray(resultData) && resultData.length > 0) {
+          // Jika ada data, kita bisa asumsikan tugas selesai dan tampilkan hasilnya.
+          return { success: true, introText: `Berikut hasil dari pemanggilan fungsi \`${toolCall.name}\`:`, tables: [{ title: `Hasil dari: ${toolCall.name}`, data: resultData }] };
+        }
+        observation = `Function ${toolCall.name} executed successfully but returned no data or an empty array. This might mean the query found nothing, or it was an action like 'delete'. The operation itself was successful. I should now decide if the user's overall goal is complete or if I need to take another step.`;
+        fullHistory.push({ role: 'user', content: `OBSERVATION: ${observation}` });
+      } else {
+        observation = `Function ${toolCall.name} failed with error: "${result.error}". I must analyze this error. If it's about missing information (like a 'jurusan' not found), I should ask the user for clarification. If it's a duplicate error, I should inform the user that the data already exists.`;
+        fullHistory.push({ role: 'user', content: `OBSERVATION: ${observation}` });
       }
+    } else if (textPart?.text) {
+      return { success: true, introText: textPart.text };
     } else {
-      allSuccess = false;
-      errors.push(result.error || `Fungsi ${call.name} gagal.`);
+      return { success: false, error: "AI tidak memberikan aksi atau respons yang valid." };
     }
   }
 
-  if (!allSuccess) {
-    return { success: false, error: errors.join('\n') };
-  }
-
-  const introText = results.length > 0 ? results.join('\n\n') : (tables.length > 0 ? `Tentu! Berikut data yang Anda minta:` : `Semua aksi telah berhasil dieksekusi.`);
-
-  return {
-    success: true,
-    introText: introText,
-    tables: tables,
-    outroText: `Ada lagi yang bisa saya bantu? 😊`
-  };
+  return { success: false, error: "Agen gagal mencapai solusi setelah beberapa kali percobaan. Mungkin permintaan terlalu kompleks." };
 }
 
-export async function processExcelFile(formData: FormData, model: AIModel): Promise<RichAIResponse> {
-  const file = formData.get('file') as File;
-  if (!file) return { success: false, error: 'File tidak ditemukan.' };
-  try {
-    const bytes = await file.arrayBuffer();
-    const workbook = xlsx.read(bytes);
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const json = xlsx.utils.sheet_to_json<UserDataFromExcel>(worksheet, {
-      header: ["email", "full_name", "phone_number", "role", "nim_or_nidn", "nama_program_studi", "angkatan"],
-      range: 1
-    });
-    const result = await addUsersFromFile(json);
-    if (result.success && typeof result.data === 'object' && result.data !== null) {
-      const { successCount, errors, totalRows } = result.data as { successCount: number; errors: string[]; totalRows: number; };
-      return {
-        success: true,
-        introText: `Proses impor file selesai! Dari ${totalRows} baris, ${successCount} pengguna berhasil ditambahkan.`,
-        tables: errors.length > 0 ? [{ title: "Detail Kegagalan", data: errors.map((e: string) => ({ Error: e })) }] : [],
-        outroText: "Apakah ada lagi yang bisa dibantu?"
-      }
-    }
-    throw new Error('Gagal memproses file.');
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Terjadi kesalahan tidak diketahui';
-    return { success: false, error: `Gagal memproses file Excel: ${errorMessage}` };
-  }
-}
 
 // ============================================================================
 // DATABASE FUNCTION ROUTER
 // ============================================================================
-
 async function executeDatabaseFunction(name: string, args: Record<string, unknown>): Promise<FunctionResult> {
   try {
     switch (name) {
-      case 'addJurusan': return { success: true, data: await addJurusan(args.jurusan_data as JurusanInsert[]) };
-      case 'addProdi': return { success: true, data: await addProdi(args.prodi_data as ProdiInsertArg[]) };
-      case 'addMataKuliah': return { success: true, data: await addMataKuliah(args.matkul_data as MataKuliahInsertArg[]) };
+      case 'addJurusan': return { success: true, data: await addJurusan(args.jurusan_data as JurusanInsert | JurusanInsert[]) };
+      case 'addProdi': return { success: true, data: await addProdi(args.prodi_data as ProdiInsertArg | ProdiInsertArg[]) };
+      case 'addMataKuliah': return { success: true, data: await addMataKuliah(args.matkul_data as MataKuliahInsertArg | MataKuliahInsertArg[]) };
       case 'addModulAjar': return { success: true, data: await addModulAjar(args.modul_data as ModulAjarInsertArg) };
       case 'addUser': return { success: true, data: await addUser(args as UserDataFromExcel) };
       case 'showJurusan': return { success: true, data: await showJurusan() };
@@ -216,44 +183,98 @@ async function executeDatabaseFunction(name: string, args: Record<string, unknow
 }
 
 // ============================================================================
-// FULL DATABASE IMPLEMENTATIONS (FULLY TYPED & CORRECTED)
+// FULL DATABASE IMPLEMENTATIONS (TANGGUH & LENGKAP)
 // ============================================================================
-
-// --- CREATE ---
 // --- CREATE ---
 async function addJurusan(jurusanData: JurusanInsert | JurusanInsert[]) {
   const supabase = createClient();
-  // PERBAIKAN: Ubah input menjadi array jika bukan array
   const dataAsArray = Array.isArray(jurusanData) ? jurusanData : [jurusanData];
+
+  for (const jurusan of dataAsArray) {
+    if (!jurusan.name) {
+      throw new Error(`Informasi tidak lengkap. Saya memerlukan nama jurusan untuk ditambahkan.`);
+    }
+    const { data: existing, error: checkError } = await supabase
+      .from('jurusan')
+      .select('name')
+      .ilike('name', jurusan.name)
+      .single();
+
+    if (checkError && checkError.code !== 'PGRST116') {
+      throw checkError;
+    }
+    if (existing) {
+      throw new Error(`Jurusan dengan nama "${jurusan.name}" sudah ada di database.`);
+    }
+  }
+
   const { data, error } = await supabase.from('jurusan').insert(dataAsArray).select('name');
-  if (error) throw error;
+
+  if (error) {
+    if (error.code === '23505') {
+      throw new Error(`Gagal menambahkan: salah satu Kode Jurusan yang Anda masukkan mungkin sudah digunakan.`);
+    }
+    throw error;
+  }
+
   return [{ message: `${data.length} jurusan berhasil ditambahkan.` }];
 }
 
 async function addProdi(prodiData: ProdiInsertArg | ProdiInsertArg[]) {
   const supabase = createClient();
-  // PERBAIKAN: Ubah input menjadi array jika bukan array
   const dataAsArray = Array.isArray(prodiData) ? prodiData : [prodiData];
-  const jurusanNames = [...new Set(dataAsArray.map(p => p.nama_jurusan))];
-  const { data: jurusans, error: jurError } = await supabase.from('jurusan').select('id, name').in('name', jurusanNames);
-  if (jurError) throw jurError;
-  const jurusanMap = new Map(jurusans.map(j => [j.name, j.id]));
 
-  const dataToInsert = dataAsArray.map(p => {
-    const jurusan_id = jurusanMap.get(p.nama_jurusan);
-    if (!jurusan_id) throw new Error(`Jurusan '${p.nama_jurusan}' tidak ditemukan.`);
-    return { name: p.name, jenjang: p.jenjang, jurusan_id, kode_prodi_internal: p.kode_prodi_internal };
-  });
+  for (const prodi of dataAsArray) {
+    if (!prodi.nama_jurusan || !prodi.jenjang || !prodi.name) {
+      throw new Error(`Informasi tidak lengkap. Untuk menambahkan prodi "${prodi.name || '(tanpa nama)'}", 
+      saya memerlukan nama prodi, nama jurusannya, dan jenjang pendidikannya (contoh: D3 atau D4).`);
+  }
+  const { data: existing, error: checkError } = await supabase
+    .from('program_studi')
+    .select('name')
+    .ilike('name', prodi.name)
+    .single();
+  if (checkError && checkError.code !== 'PGRST116') throw checkError;
+  if (existing) throw new Error(`Program studi dengan nama "${prodi.name}" sudah ada.`);
+}
 
-  const { data, error } = await supabase.from('program_studi').insert(dataToInsert).select('name');
-  if (error) throw error;
-  return [{ message: `${data.length} program studi berhasil ditambahkan.` }];
+const jurusanNames = [...new Set(dataAsArray.map(p => p.nama_jurusan))];
+const { data: jurusans, error: jurError } = await supabase.from('jurusan').select('id, name').in('name', jurusanNames);
+if (jurError) throw jurError;
+
+if (jurusans.length !== jurusanNames.length) {
+  const foundNames = new Set(jurusans.map(j => j.name));
+  const notFound = jurusanNames.filter(name => !foundNames.has(name));
+  throw new Error(`Satu atau lebih jurusan tidak ditemukan: ${notFound.join(', ')}. Silakan periksa kembali nama jurusannya.`);
+}
+
+const jurusanMap = new Map(jurusans.map(j => [j.name, j.id]));
+
+const dataToInsert = dataAsArray.map(p => {
+  const jurusan_id = jurusanMap.get(p.nama_jurusan);
+  if (!jurusan_id) throw new Error(`Jurusan '${p.nama_jurusan}' tidak ditemukan (internal error).`);
+  return { name: p.name, jenjang: p.jenjang, jurusan_id, kode_prodi_internal: p.kode_prodi_internal };
+});
+
+const { data, error } = await supabase.from('program_studi').insert(dataToInsert).select('name');
+if (error) throw error;
+return [{ message: `${data.length} program studi berhasil ditambahkan.` }];
 }
 
 async function addMataKuliah(matkulData: MataKuliahInsertArg | MataKuliahInsertArg[]) {
   const supabase = createClient();
-  // PERBAIKAN: Ubah input menjadi array jika bukan array
   const dataAsArray = Array.isArray(matkulData) ? matkulData : [matkulData];
+
+  for (const matkul of dataAsArray) {
+    if (!matkul.nama_prodi || !matkul.name || !matkul.semester) {
+      throw new Error(`Informasi tidak lengkap. Untuk menambahkan mata kuliah, saya butuh nama mata kuliah, nama prodi, dan semester.`);
+    }
+    if (matkul.kode_mk) {
+      const { data: existing } = await supabase.from('mata_kuliah').select('kode_mk').eq('kode_mk', matkul.kode_mk).single();
+      if (existing) throw new Error(`Mata kuliah dengan kode "${matkul.kode_mk}" sudah ada.`);
+    }
+  }
+
   const prodiNames = [...new Set(dataAsArray.map(mk => mk.nama_prodi))];
   const { data: prodis, error: prodiError } = await supabase.from('program_studi').select('id, name').in('name', prodiNames);
   if (prodiError) throw prodiError;
@@ -328,7 +349,7 @@ async function showJurusan() {
   const supabase = createClient();
   const { data, error } = await supabase.from('jurusan').select('name, kode_jurusan');
   if (error) throw error;
-  return data || []; // Return empty array if data is null
+  return data || [];
 }
 
 async function showProdi(nama_jurusan?: string) {
@@ -341,17 +362,12 @@ async function showProdi(nama_jurusan?: string) {
   }
   const { data, error } = await query;
   if (error) throw error;
-  const typedData = data || []; // Fallback to empty array
-  return typedData.map(item => {
-    // Safely access related data
-    const jurusanName = (item.jurusan as { name: string })?.name || 'N/A';
-    return {
-      "Nama Prodi": item.name,
-      "Jenjang": item.jenjang,
-      "Kode": item.kode_prodi_internal || '-',
-      "Jurusan": jurusanName
-    };
-  });
+  return (data || []).map(item => ({
+    "Nama Prodi": item.name,
+    "Jenjang": item.jenjang,
+    "Kode": item.kode_prodi_internal || '-',
+    "Jurusan": (item.jurusan as { name: string })?.name || 'N/A'
+  }));
 }
 
 async function showMataKuliah(nama_prodi?: string, semester?: number) {
@@ -367,8 +383,7 @@ async function showMataKuliah(nama_prodi?: string, semester?: number) {
   }
   const { data, error } = await query;
   if (error) throw error;
-  const typedData = data || []; // Fallback to empty array
-  return typedData.map(item => ({
+  return (data || []).map(item => ({
     "Nama MK": item.name,
     "Kode": item.kode_mk,
     "SMT": item.semester,
@@ -389,8 +404,7 @@ async function showModulAjar(kode_mk?: string, dosen_id?: string) {
   }
   const { data, error } = await query;
   if (error) throw error;
-  const typedData = data || []; // Fallback to empty array
-  return typedData.map(item => ({
+  return (data || []).map(item => ({
     ID: item.id,
     Judul: item.title,
     "Mata Kuliah": (item.mata_kuliah as { name: string })?.name,
@@ -413,8 +427,7 @@ async function showUsers(role?: UserRole): Promise<Record<string, any>[]> {
   if (role === 'dosen') {
     const { data, error } = await supabase.from('profiles').select<string, DosenProfileWithDetails>('full_name, email, dosen_details ( nidn, prodi_id )').eq('role', 'dosen');
     if (error) throw error;
-    const typedData = data || []; // Fallback to empty array
-    return typedData.map(item => {
+    return (data || []).map(item => {
       const dosenDetails = Array.isArray(item.dosen_details) ? item.dosen_details[0] : item.dosen_details;
       return {
         Nama: item.full_name,
@@ -423,11 +436,10 @@ async function showUsers(role?: UserRole): Promise<Record<string, any>[]> {
         Role: 'Dosen'
       }
     });
-  } else { // role === 'mahasiswa'
+  } else {
     const { data, error } = await supabase.from('profiles').select<string, MahasiswaProfileWithDetails>('full_name, email, mahasiswa_details ( nim, angkatan )').eq('role', 'mahasiswa');
     if (error) throw error;
-    const typedData = data || []; // Fallback to empty array
-    return typedData.map(item => {
+    return (data || []).map(item => {
       const mahasiswaDetails = Array.isArray(item.mahasiswa_details) ? item.mahasiswa_details[0] : item.mahasiswa_details;
       return {
         Nama: item.full_name,
@@ -524,7 +536,6 @@ async function deleteUserByNim(nim: string) {
   if (profileError) throw profileError;
   return [{ message: `Mahasiswa dengan NIM '${nim}' berhasil dihapus.` }];
 }
-
 async function deleteDosenByNidn(nidn: string) {
   const supabase = createClient();
   const { data: detail, error: detailError } = await supabase.from('dosen_details').delete().eq('nidn', nidn).select('profile_id').single();
@@ -534,9 +545,7 @@ async function deleteDosenByNidn(nidn: string) {
   return [{ message: `Dosen dengan NIDN '${nidn}' berhasil dihapus.` }];
 }
 
-
 // --- RELASI DOSEN & MATA KULIAH ---
-
 async function assignDosenToMataKuliah(email_dosen: string, kode_mk: string) {
   const supabase = createClient();
   const { data: dosen, error: dosenError } = await supabase.from('profiles').select('id').eq('email', email_dosen).eq('role', 'dosen').single();
@@ -572,7 +581,6 @@ async function showDosenMataKuliah(email_dosen?: string, kode_mk?: string) {
   const { data, error } = await query;
   if (error) throw error;
 
-  // Membersihkan struktur data agar mudah dibaca
   return (data || []).map(item => ({
     "Nama Dosen": (item.profiles as any)?.full_name || 'N/A',
     "Email Dosen": (item.profiles as any)?.email || 'N/A',
@@ -613,9 +621,9 @@ async function getDatabaseSchema() {
 }
 async function checkTableCounts(): Promise<FunctionResult['data']> {
   const supabase = createClient();
-  const tables = ["profiles", "jurusan", "program_studi", "mahasiswa_details", "dosen_details", "mata_kuliah", "modul_ajar"];
+  const tables = ["profiles", "jurusan", "program_studi", "mahasiswa_details", "dosen_details", "mata_kuliah", "modul_ajar", "dosen_mata_kuliah"];
   const counts = await Promise.all(tables.map(async (tableName) => {
-    const { count, error } = await supabase.from(tableName).select('id', { count: 'exact', head: true });
+    const { count, error } = await supabase.from(tableName).select('*', { count: 'exact', head: true });
     return { table: tableName, count: error ? 'Error' : (count ?? 0) };
   }));
   return counts;
@@ -627,4 +635,3 @@ async function getAddUserTemplate(): Promise<FunctionResult> {
   ];
   return { success: true, data: templateData };
 }
-
