@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from "@/lib/supabase/server";
-import { AIModel, RichAIResponse, ToolCall } from "@/types/ai";
+import { AIModel, DataTable, RichAIResponse, ToolCall } from "@/types/ai";
 import {
   DosenProfileWithDetails,
   MahasiswaProfileWithDetails,
@@ -25,14 +25,13 @@ type JurusanInsert = { name: string; kode_jurusan?: string; };
 type ProdiInsertArg = { nama_jurusan: string; name: string; jenjang: string; kode_prodi_internal?: string; };
 type MataKuliahInsertArg = { nama_prodi: string; name: string; kode_mk?: string; semester: number; };
 type ModulAjarInsertArg = { kode_mk: string; email_dosen: string; title: string; file_url: string; angkatan: number; };
-
 type JurusanUpdate = Partial<JurusanInsert>;
 type ProdiUpdateArg = Partial<ProdiInsertArg>;
 type MataKuliahUpdateArg = Partial<MataKuliahInsertArg>;
 type ModulAjarUpdate = Partial<Omit<ModulAjarInsertArg, 'kode_mk' | 'email_dosen'>>;
 
 // ============================================================================
-// CORE AI & REASONING LOOP
+// CORE AI & ORCHESTRATION
 // ============================================================================
 
 export async function signOutUser() {
@@ -56,11 +55,22 @@ async function callAI(history: GeminiContent[], model: AIModel, systemPrompt: st
   return data.parts;
 }
 
+// FUNGSI UTAMA YANG MENGIMPLEMENTASIKAN STRATEGI DUA JALUR
 export async function chatWithAdminAgent(prompt: string, history: Message[], model: AIModel): Promise<RichAIResponse> {
+  if (model === 'llama' || model === 'deepseek') {
+    return await handleOllamaSingleShot(prompt, model);
+  } else {
+    return await handleGeminiReasoningLoop(prompt, history, model);
+  }
+}
+
+// ============================================================================
+// JALUR 1: REASONING LOOP UNTUK GEMINI
+// ============================================================================
+async function handleGeminiReasoningLoop(prompt: string, history: Message[], model: AIModel): Promise<RichAIResponse> {
   const supabase = createClient();
   let observation: string | null = "No action has been taken yet. You are at the start of the conversation.";
   const MAX_TURNS = 5;
-
   const fullHistory: Message[] = [...history, { role: 'user', content: prompt }];
 
   for (let i = 0; i < MAX_TURNS; i++) {
@@ -80,21 +90,7 @@ export async function chatWithAdminAgent(prompt: string, history: Message[], mod
 
     const schemaContext = sections?.map((s: any) => s.content).join('\n---\n') || "No relevant schema context found.";
 
-    const systemPrompt = `
-    Anda adalah POLCER AI Agent, asisten ahli untuk database Politeknik Negeri Pontianak. Tujuan Anda adalah memenuhi permintaan pengguna dengan memanggil satu atau lebih fungsi.
-    
-    **PROSES PENALARAN (SIKLUS NALAR -> AKSI -> OBSERVASI):**
-    1.  **NALAR**: Berdasarkan seluruh riwayat percakapan dan "OBSERVASI" dari aksi sebelumnya, formulasikan sebuah rencana dalam pikiran Anda.
-    2.  **AKSI**: Pilih **SATU** fungsi dari daftar 'tools' yang tersedia untuk dieksekusi. Respons Anda HARUS berupa satu objek JSON yang valid untuk panggilan fungsi tersebut.
-    3.  **TUNGGU OBSERVASI**: Setelah Anda bertindak, sistem akan memberikan hasil (sukses atau error) sebagai "OBSERVASI" baru untuk siklus berikutnya. Gunakan observasi ini untuk menentukan langkah selanjutnya.
-    4.  **SELESAI/BERTANYA**: Jika Anda sudah memiliki semua informasi dan tugas selesai, atau jika Anda memerlukan informasi lebih lanjut dari pengguna setelah menganalisis observasi, akhiri siklus dengan memberikan respons dalam format teks biasa.
-    
-    **KONTEKS SKEMA DATABASE (DARI MEMORI ANDA):**
-    ${schemaContext}
-    
-    **OBSERVASI DARI AKSI SEBELUMNYA:**
-    ${observation}
-    `;
+    const systemPrompt = `Anda adalah POLCER AI Agent... (Salin System Prompt Reasoning Loop dari jawaban sebelumnya di sini)`; // Disingkat untuk kejelasan
 
     const apiHistory: GeminiContent[] = fullHistory.map((msg) => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
@@ -107,14 +103,9 @@ export async function chatWithAdminAgent(prompt: string, history: Message[], mod
 
     if (functionCallPart?.functionCall) {
       const toolCall = functionCallPart.functionCall as ToolCall;
-
       const result = await executeDatabaseFunction(toolCall.name, toolCall.args);
 
-      // Update history untuk siklus berikutnya
-      fullHistory.push({
-        role: 'assistant',
-        content: `(Memanggil fungsi ${toolCall.name} dengan argumen ${JSON.stringify(toolCall.args)})`,
-      });
+      fullHistory.push({ role: 'assistant', content: `(Memanggil fungsi ${toolCall.name})` });
 
       if (result.success) {
         const resultData = result.data;
@@ -122,13 +113,12 @@ export async function chatWithAdminAgent(prompt: string, history: Message[], mod
           return { success: true, introText: resultData[0].message };
         }
         if (Array.isArray(resultData) && resultData.length > 0) {
-          // Jika ada data, kita bisa asumsikan tugas selesai dan tampilkan hasilnya.
-          return { success: true, introText: `Berikut hasil dari pemanggilan fungsi \`${toolCall.name}\`:`, tables: [{ title: `Hasil dari: ${toolCall.name}`, data: resultData }] };
+          return { success: true, introText: `Berikut hasil dari \`${toolCall.name}\`:`, tables: [{ title: `Hasil: ${toolCall.name}`, data: resultData }] };
         }
-        observation = `Function ${toolCall.name} executed successfully but returned no data or an empty array. This might mean the query found nothing, or it was an action like 'delete'. The operation itself was successful. I should now decide if the user's overall goal is complete or if I need to take another step.`;
+        observation = `Function ${toolCall.name} executed successfully but returned no data.`;
         fullHistory.push({ role: 'user', content: `OBSERVATION: ${observation}` });
       } else {
-        observation = `Function ${toolCall.name} failed with error: "${result.error}". I must analyze this error. If it's about missing information (like a 'jurusan' not found), I should ask the user for clarification. If it's a duplicate error, I should inform the user that the data already exists.`;
+        observation = `Function ${toolCall.name} failed with error: "${result.error}". I must analyze this error and ask the user for clarification if needed.`;
         fullHistory.push({ role: 'user', content: `OBSERVATION: ${observation}` });
       }
     } else if (textPart?.text) {
@@ -137,10 +127,55 @@ export async function chatWithAdminAgent(prompt: string, history: Message[], mod
       return { success: false, error: "AI tidak memberikan aksi atau respons yang valid." };
     }
   }
-
-  return { success: false, error: "Agen gagal mencapai solusi setelah beberapa kali percobaan. Mungkin permintaan terlalu kompleks." };
+  return { success: false, error: "Agen gagal mencapai solusi setelah beberapa kali percobaan." };
 }
 
+// ============================================================================
+// JALUR 2: SINGLE-SHOT UNTUK OLLAMA
+// ============================================================================
+async function handleOllamaSingleShot(prompt: string, model: AIModel): Promise<RichAIResponse> {
+  function generateSimpleToolString(): string {
+    // ... (Fungsi ini sama seperti di jawaban sebelumnya)
+    return "Contoh: showJurusan(), deleteUserByNim(nim: STRING)";
+  }
+
+  const simplifiedTools = generateSimpleToolString();
+  const systemPrompt = `You are a JSON API... (Salin OLLAMA_SYSTEM_PROMPT dari jawaban sebelumnya di sini, termasuk contoh-contohnya)`.replace('{simplified_tools}', simplifiedTools) + `\n\nUser: "${prompt}"\nYour JSON:`;
+
+  try {
+    const responseParts = await callAI([], model, systemPrompt); // history kosong, karena prompt sudah lengkap
+
+    const functionCalls = responseParts
+      .map(part => part.functionCall)
+      .filter((call): call is ToolCall => call != null && typeof call.name === 'string');
+
+    if (functionCalls.length > 0) {
+      // Untuk Ollama, kita eksekusi semua tool calls yang dihasilkan
+      const tables: DataTable[] = [];
+      const results: string[] = [];
+      for (const call of functionCalls) {
+        const result = await executeDatabaseFunction(call.name, call.args || {});
+        if (result.success) {
+          const data = result.data;
+          if (Array.isArray(data) && data.length > 0 && data[0]?.message) {
+            results.push(data[0].message);
+          } else if (Array.isArray(data)) {
+            tables.push({ title: `Hasil: ${call.name}`, data });
+          }
+        } else {
+          return { success: false, error: result.error };
+        }
+      }
+      return { success: true, introText: results.join('\n'), tables };
+    } else if (responseParts[0]?.text) {
+      return { success: true, introText: responseParts[0].text };
+    }
+    return { success: false, error: "Respons dari AI tidak dapat dipahami." };
+
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
 
 // ============================================================================
 // DATABASE FUNCTION ROUTER

@@ -1,6 +1,6 @@
 'use client';
 
-import { chatWithAdminAgent, signOutUser } from '@/app/admin/actions';
+import { chatWithAdminAgent, processExcelFile, signOutUser } from '@/app/admin/actions';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from '@/components/ui/button';
 import {
@@ -16,7 +16,7 @@ import {
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AIModel, RichAIResponse } from '@/types/ai';
-import { Bot, BrainCircuit, Check, ChevronDown, Loader2, LogOut, PanelLeft, Plus } from 'lucide-react';
+import { Bot, BrainCircuit, ChevronDown, Loader2, LogOut, PanelLeft, Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -40,7 +40,7 @@ const getGreeting = () => {
 };
 
 const modelData = {
-  gemini: { name: 'Gemini 1.5 Flash', Icon: GeminiIcon },
+  gemini: { name: 'Gemini 1.5', Icon: GeminiIcon },
   llama: { name: 'Llama 3.1', Icon: LlamaIcon },
   deepseek: { name: 'DeepSeek v2', Icon: DeepseekIcon },
 };
@@ -50,7 +50,7 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
   const [greeting, setGreeting] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<AIModel>('gemini'); // Default ke Gemini untuk fitur terbaik
+  const [selectedModel, setSelectedModel] = useState<AIModel>('llama');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const CurrentModelIcon = useMemo(() => modelData[selectedModel].Icon, [selectedModel]);
@@ -68,26 +68,38 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: 'user', content: input };
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
+    setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
-    // Panggil Server Action 'chatWithAdminAgent' yang baru dengan arsitektur Reasoning Loop
-    const response = await chatWithAdminAgent(input, messages, selectedModel);
+    // Alur baru yang disederhanakan: panggil server action dan tunggu respons final
+    const finalResponse = await chatWithAdminAgent(input, messages, selectedModel);
 
     const assistantMessage: Message = {
       role: 'assistant',
-      content: response.introText || response.error || "Berikut hasilnya:",
-      response: response
+      content: finalResponse.introText || finalResponse.error || "Berikut hasilnya:",
+      response: finalResponse
     };
-    setMessages([...newMessages, assistantMessage]);
+    setMessages(prev => [...prev, assistantMessage]);
+
     setIsLoading(false);
   };
 
-  // Fungsi handleFileChange tidak perlu diubah
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    // Implementasi untuk file processing tetap sama, bisa ditambahkan jika diperlukan
-    console.log("File processing to be implemented.");
+    const file = event.target.files?.[0];
+    if (!file || isLoading) return;
+    const userMessage: Message = { role: 'user', content: `Memproses file: ${file.name}` };
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    const result = await processExcelFile(formData);
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: result.introText || result.error || "File telah diproses.",
+      response: result
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+    setIsLoading(false);
     if (event.target) event.target.value = "";
   };
 
@@ -164,7 +176,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
                     <DropdownMenuRadioItem key={modelKey} value={modelKey} className="flex items-center gap-2">
                       <Icon className="h-4 w-4" />
                       <span>{name}</span>
-                      {selectedModel === modelKey && <Check className="ml-auto h-4 w-4" />}
                     </DropdownMenuRadioItem>
                   );
                 })}
@@ -204,7 +215,7 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
                 Ada {unverifiedCount} pengguna baru yang menunggu verifikasi Anda.
               </p>
             ) : (
-              <p className="text-xl text-gray-500 mt-4">Bagaimana saya bisa membantu hari ini?</p>
+              <p className="text-xl text-gray-500 mt-4">Bagaimana saya bisa membantu Anda hari ini?</p>
             )}
           </div>
           <ChatInputForm onSubmit={handleSendMessage} onFileChange={handleFileChange} isLoading={isLoading} />
@@ -218,7 +229,7 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
                 <div className={`rounded-2xl px-4 py-2.5 max-w-[85%] ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'}`}>
                   {msg.role === 'user' ? (<p>{msg.content}</p>) : (
                     <div className="prose prose-sm max-w-none prose-p:my-2">
-                      {msg.response?.introText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.response.introText}</ReactMarkdown>}
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                       {msg.response?.tables && msg.response.tables.map((table, tableIndex) => (
                         <div key={tableIndex} className="mt-3">
                           {table.title && <h4 className="font-semibold mb-2">{table.title}</h4>}
@@ -243,7 +254,6 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
                         </div>
                       ))}
                       {msg.response?.outroText && <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.response.outroText}</ReactMarkdown>}
-                      {msg.response?.error && <p className="text-red-600 mt-2">Error: {msg.response.error}</p>}
                     </div>
                   )}
                 </div>
@@ -274,3 +284,4 @@ export default function SuperAdminDashboard({ userName, avatarUrl, unverifiedCou
     </div>
   );
 }
+

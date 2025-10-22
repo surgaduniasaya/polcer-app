@@ -9,39 +9,32 @@ const DEEPSEEK_MODEL_NAME = process.env.DEEPSEEK_MODEL_NAME || 'deepseek-r1:1.5b
 const tools = [
   {
     function_declarations: [
-      // Meta
       { name: 'getDatabaseSchema', description: "Menampilkan informasi tentang semua tabel yang ada di database." },
       { name: 'checkTableCounts', description: "Menghitung jumlah data di setiap tabel." },
-      // Jurusan
       { name: 'addJurusan', description: 'Menambahkan satu atau lebih jurusan baru.', parameters: { type: 'OBJECT', properties: { jurusan_data: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, kode_jurusan: { type: 'STRING' } }, required: ['name'] } } }, required: ['jurusan_data'] } },
       { name: 'showJurusan', description: 'Menampilkan semua jurusan yang ada.', parameters: { type: 'OBJECT', properties: {} } },
       { name: 'updateJurusan', description: 'Mengubah data jurusan.', parameters: { type: 'OBJECT', properties: { current_name: { type: 'STRING' }, new_data: { type: 'OBJECT', properties: { name: { type: 'STRING' }, kode_jurusan: { type: 'STRING' } } } }, required: ['current_name', 'new_data'] } },
       { name: 'deleteJurusan', description: 'Menghapus sebuah jurusan berdasarkan namanya.', parameters: { type: 'OBJECT', properties: { name: { type: 'STRING' } }, required: ['name'] } },
-      // Prodi
       { name: 'addProdi', description: 'Menambahkan satu atau lebih program studi baru.', parameters: { type: 'OBJECT', properties: { prodi_data: { type: 'ARRAY', items: { type: 'OBJECT', properties: { nama_jurusan: { type: 'STRING' }, name: { type: 'STRING' }, jenjang: { type: 'STRING' }, kode_prodi_internal: { type: 'STRING' } }, required: ['nama_jurusan', 'name', 'jenjang'] } } }, required: ['prodi_data'] } },
-      { name: 'showProdi', description: 'Menampilkan semua program studi. Bisa difilter berdasarkan nama_jurusan.', parameters: { type: 'OBJECT', properties: { nama_jurusan: { type: 'STRING' } } } },
+      { name: 'showProdi', description: 'Menampilkan semua program studi.', parameters: { type: 'OBJECT', properties: { nama_jurusan: { type: 'STRING' } } } },
       { name: 'updateProdi', description: 'Mengubah data program studi.', parameters: { type: 'OBJECT', properties: { current_name: { type: 'STRING' }, new_data: { type: 'OBJECT', properties: { name: { type: 'STRING' }, jenjang: { type: 'STRING' }, nama_jurusan: { type: 'STRING' }, kode_prodi_internal: { type: 'STRING' } } } }, required: ['current_name', 'new_data'] } },
       { name: 'deleteProdi', description: 'Menghapus sebuah program studi berdasarkan namanya.', parameters: { type: 'OBJECT', properties: { name: { type: 'STRING' } }, required: ['name'] } },
-      // Mata Kuliah
       { name: 'addMataKuliah', description: 'Menambahkan mata kuliah baru.', parameters: { type: 'OBJECT', properties: { matkul_data: { type: 'ARRAY', items: { type: 'OBJECT', properties: { nama_prodi: { type: 'STRING' }, name: { type: 'STRING' }, kode_mk: { type: 'STRING' }, semester: { type: 'NUMBER' } }, required: ['nama_prodi', 'name', 'semester'] } } }, required: ['matkul_data'] } },
-      { name: 'showMataKuliah', description: 'Menampilkan semua mata kuliah. Bisa difilter berdasarkan nama_prodi dan semester.', parameters: { type: 'OBJECT', properties: { nama_prodi: { type: 'STRING' }, semester: { type: 'NUMBER' } } } },
+      { name: 'showMataKuliah', description: 'Menampilkan semua mata kuliah.', parameters: { type: 'OBJECT', properties: { nama_prodi: { type: 'STRING' }, semester: { type: 'NUMBER' } } } },
       { name: 'updateMataKuliah', description: 'Mengubah data mata kuliah.', parameters: { type: 'OBJECT', properties: { current_kode_mk: { type: 'STRING' }, new_data: { type: 'OBJECT', properties: { name: { type: 'STRING' }, kode_mk: { type: 'STRING' }, semester: { type: 'NUMBER' }, nama_prodi: { type: 'STRING' } } } }, required: ['current_kode_mk', 'new_data'] } },
       { name: 'deleteMataKuliah', description: 'Menghapus mata kuliah berdasarkan kodenya.', parameters: { type: 'OBJECT', properties: { kode_mk: { type: 'STRING' } }, required: ['kode_mk'] } },
-      // Modul Ajar
       { name: 'addModulAjar', description: 'Menambahkan modul ajar baru.', parameters: { type: 'OBJECT', properties: { modul_data: { type: 'OBJECT', properties: { kode_mk: { type: 'STRING' }, email_dosen: { type: 'STRING' }, title: { type: 'STRING' }, file_url: { type: 'STRING' }, angkatan: { type: 'NUMBER' } }, required: ['kode_mk', 'email_dosen', 'title', 'file_url', 'angkatan'] } }, required: ['modul_data'] } },
-      { name: 'showModulAjar', description: 'Menampilkan semua modul ajar. Bisa difilter berdasarkan kode_mk atau dosen_id.', parameters: { type: 'OBJECT', properties: { kode_mk: { type: 'STRING' }, dosen_id: { type: 'STRING' } } } },
+      { name: 'showModulAjar', description: 'Menampilkan semua modul ajar.', parameters: { type: 'OBJECT', properties: { kode_mk: { type: 'STRING' }, dosen_id: { type: 'STRING' } } } },
       { name: 'updateModulAjar', description: 'Mengubah data modul ajar.', parameters: { type: 'OBJECT', properties: { current_id: { type: 'STRING' }, new_data: { type: 'OBJECT', properties: { title: { type: 'STRING' }, file_url: { type: 'STRING' }, angkatan: { type: 'NUMBER' } } } }, required: ['current_id', 'new_data'] } },
       { name: 'deleteModulAjar', description: 'Menghapus modul ajar berdasarkan ID-nya.', parameters: { type: 'OBJECT', properties: { id: { type: 'STRING' } }, required: ['id'] } },
-      // Pengguna (Users)
       { name: 'addUser', description: 'Menambahkan pengguna baru (mahasiswa atau dosen).', parameters: { type: 'OBJECT', properties: { email: { type: 'STRING' }, full_name: { type: 'STRING' }, role: { type: 'STRING' }, nama_program_studi: { type: 'STRING' }, nim_or_nidn: { type: 'STRING' }, angkatan: { type: 'NUMBER' } }, required: ['email', 'full_name', 'role', 'nama_program_studi'] } },
       { name: 'showUsers', description: "Menampilkan daftar pengguna. Jika peran tidak spesifik, panggil dua kali: sekali untuk 'mahasiswa', sekali untuk 'dosen'.", parameters: { type: 'OBJECT', properties: { role: { type: 'STRING', enum: ['mahasiswa', 'dosen'] } } } },
       { name: 'deleteUserByNim', description: 'Menghapus mahasiswa berdasarkan NIM.', parameters: { type: 'OBJECT', properties: { nim: { type: 'STRING' } }, required: ['nim'] } },
       { name: 'deleteDosenByNidn', description: 'Menghapus dosen berdasarkan NIDN.', parameters: { type: 'OBJECT', properties: { nidn: { type: 'STRING' } }, required: ['nidn'] } },
+      { name: 'assignDosenToMataKuliah', description: 'Menugaskan dosen ke mata kuliah.', parameters: { type: 'OBJECT', properties: { email_dosen: { type: 'STRING' }, kode_mk: { type: 'STRING' } }, required: ['email_dosen', 'kode_mk'] } },
+      { name: 'showDosenMataKuliah', description: 'Menampilkan dosen yang mengajar mata kuliah tertentu, atau sebaliknya.', parameters: { type: 'OBJECT', properties: { email_dosen: { type: 'STRING' }, kode_mk: { type: 'STRING' } } } },
+      { name: 'unassignDosenFromMataKuliah', description: 'Membatalkan tugas dosen dari mata kuliah.', parameters: { type: 'OBJECT', properties: { email_dosen: { type: 'STRING' }, kode_mk: { type: 'STRING' } }, required: ['email_dosen', 'kode_mk'] } },
       { name: 'getAddUserTemplate', description: 'Memberikan template Excel untuk menambahkan pengguna massal.', parameters: { type: 'OBJECT', properties: {} } },
-      // Relasi Dosen-MK
-      { name: 'assignDosenToMataKuliah', description: 'Menugaskan seorang dosen ke sebuah mata kuliah.', parameters: { type: 'OBJECT', properties: { email_dosen: { type: 'STRING' }, kode_mk: { type: 'STRING' } }, required: ['email_dosen', 'kode_mk'] } },
-      { name: 'showDosenMataKuliah', description: 'Menampilkan daftar dosen yang mengajar mata kuliah tertentu, atau sebaliknya.', parameters: { type: 'OBJECT', properties: { email_dosen: { type: 'STRING' }, kode_mk: { type: 'STRING' } } } },
-      { name: 'unassignDosenFromMataKuliah', description: 'Menghapus penugasan seorang dosen dari sebuah mata kuliah.', parameters: { type: 'OBJECT', properties: { email_dosen: { type: 'STRING' }, kode_mk: { type: 'STRING' } }, required: ['email_dosen', 'kode_mk'] } },
     ]
   }
 ];
@@ -79,11 +72,10 @@ async function handleGeminiRequest(history: any[], systemPrompt: string) {
   return candidate.content.parts;
 }
 
-async function handleOllamaRequest(history: any[], systemPrompt: string, model: 'llama' | 'deepseek') {
+async function handleOllamaRequest(prompt: string, model: 'llama' | 'deepseek') {
   const modelName = model === 'llama' ? LLAMA_MODEL_NAME : DEEPSEEK_MODEL_NAME;
-  const finalPrompt = `${systemPrompt}\n\n**PERCAKAPAN:**\n${history.map(h => `${h.role}: ${h.parts[0].text}`).join('\n')}\n\n**AKSI JSON BERIKUTNYA:**`;
 
-  const payload = { model: modelName, prompt: finalPrompt, format: 'json', stream: false };
+  const payload = { model: modelName, prompt: prompt, format: 'json', stream: false };
 
   const response = await fetch(OLLAMA_API_URL, {
     method: 'POST',
@@ -114,7 +106,6 @@ async function handleOllamaRequest(history: any[], systemPrompt: string, model: 
       return [{ text: parsedJson.text_response }];
     }
 
-    // Fallback jika JSON valid tapi tidak ada key yang diharapkan, kembalikan sebagai tool_call
     if (parsedJson.name && parsedJson.args) {
       return [{ functionCall: { name: parsedJson.name, args: parsedJson.args } }]
     }
@@ -132,7 +123,7 @@ export async function POST(req: Request) {
 
     let parts;
     if (model === 'llama' || model === 'deepseek') {
-      parts = await handleOllamaRequest(history, systemPrompt, model);
+      parts = await handleOllamaRequest(systemPrompt, model); // Ollama hanya butuh prompt final
     } else {
       parts = await handleGeminiRequest(history, systemPrompt);
     }
@@ -143,3 +134,4 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+
