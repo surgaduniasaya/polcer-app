@@ -29,3 +29,8 @@ export async function login() {
   return redirect(`/?error=${encodeURIComponent('Terjadi kesalahan, URL tidak ditemukan.')}`);
 }
 
+export async function signOut() {
+  const supabase = createClient();
+  await supabase.auth.signOut();
+  return redirect('/');
+}
