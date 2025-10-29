@@ -35,7 +35,7 @@ interface Message {
 const modelData = {
   gemini: { name: 'Gemini 1.5', Icon: GeminiIcon },
   llama: { name: 'Llama 3.1', Icon: LlamaIcon },
-  deepseek: { name: 'DeepSeek v2', Icon: DeepseekIcon },
+  deepseek: { name: 'DeepSeek r1', Icon: DeepseekIcon },
 };
 
 const getGreeting = () => {

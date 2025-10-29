@@ -964,7 +964,7 @@ async function addJurusan(supabaseAdmin: any, jurusanData: JurusanInsert | Jurus
   const { data, error } = await supabaseAdmin.from('jurusan').insert(dataArray).select('name');
   if (error) throw error;
 
-  return { success: true, data: [{ message: `✅ ${data.length} jurusan berhasil ditambahkan: ${data.map(j => j.name).join(', ')}` }] };
+  return { success: true, data: [{ message: `✅ ${data.length} jurusan berhasil ditambahkan: ${data.map(((j: {name: string}) => j.name)).join(', ')}` }] };
 }
 
 async function showJurusan(supabaseAdmin: any): Promise<FunctionResult> {
@@ -1113,7 +1113,7 @@ async function addProdi(supabaseAdmin: any, prodiData: ProdiInsertArg | ProdiIns
 
   if (error) throw error;
 
-  return { success: true, data: [{ message: `✅ ${data.length} program studi berhasil ditambahkan: ${data.map(p => p.name).join(', ')}` }] };
+  return { success: true, data: [{ message: `✅ ${data.length} program studi berhasil ditambahkan: ${data.map((p: {name: string}) => p.name).join(', ')}` }] };
 }
 
 async function showProdi(supabaseAdmin: any, nama_jurusan?: string): Promise<FunctionResult> {
@@ -1304,7 +1304,7 @@ async function addMataKuliah(supabaseAdmin: any, matkulData: MataKuliahInsertArg
 
   if (error) throw error;
 
-  return { success: true, data: [{ message: `✅ ${data.length} mata kuliah berhasil ditambahkan: ${data.map(m => m.name).join(', ')}` }] };
+  return { success: true, data: [{ message: `✅ ${data.length} mata kuliah berhasil ditambahkan: ${data.map((m: {name: string}) => m.name).join(', ')}` }] };
 }
 
 async function showMataKuliah(supabaseAdmin: any, nama_prodi?: string, semester?: number): Promise<FunctionResult> {

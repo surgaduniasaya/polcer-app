@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 
 // Environment variables
 const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'http://localhost:11434/api/generate';
-const LLAMA_MODEL_NAME = process.env.LLAMA_MODEL_NAME || 'llama3.1';
-const DEEPSEEK_MODEL_NAME = process.env.DEEPSEEK_MODEL_NAME || 'deepseek-r1:1.5b';
+const LLAMA_MODEL_NAME = process.env.LLAMA_MODEL_NAME || 'llama3.1:latest';
+const DEEPSEEK_MODEL_NAME = process.env.DEEPSEEK_MODEL_NAME || 'deepseek-r1:8b';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Tools definition (sama dengan di actions.tsx untuk konsistensi)
@@ -41,7 +41,7 @@ const tools = [
   }
 ];
 
-// DIPERBAIKI: Handler untuk Gemini
+// PERBAIKAN: Handler untuk Gemini dengan error handling lebih baik
 async function handleGeminiRequest(history: any[], systemPrompt: string) {
   if (!GEMINI_API_KEY) {
     throw new Error('Gemini API key not configured. Set GEMINI_API_KEY in environment variables.');
@@ -53,51 +53,63 @@ async function handleGeminiRequest(history: any[], systemPrompt: string) {
     contents: history,
     systemInstruction: { parts: [{ text: systemPrompt }] },
     tools: tools,
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.95,
+      topK: 40,
+      maxOutputTokens: 8192,
+    }
   };
 
-  console.log('[Gemini] Sending request to Gemini API...');
+  console.log('[Gemini] Sending request...');
 
-  const response = await fetch(GEMINI_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const response = await fetch(GEMINI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    console.error('[Gemini] API Error:', errorBody);
-    throw new Error(`Gemini API request failed with status ${response.status}: ${errorBody}`);
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error('[Gemini] API Error:', errorBody);
+      throw new Error(`Gemini API request failed with status ${response.status}: ${errorBody}`);
+    }
+
+    const data = await response.json();
+    console.log('[Gemini] Response received');
+
+    const candidate = data.candidates?.[0];
+    if (!candidate || !candidate.content?.parts) {
+      console.warn('[Gemini] Invalid response structure:', data);
+      return [{ text: "Maaf, saya tidak menerima respons yang valid dari Gemini. Coba lagi." }];
+    }
+
+    return candidate.content.parts;
+  } catch (error: any) {
+    console.error('[Gemini] Fetch error:', error);
+    throw new Error(`Failed to connect to Gemini API: ${error.message}`);
   }
-
-  const data = await response.json();
-  console.log('[Gemini] Response received:', JSON.stringify(data, null, 2));
-
-  const candidate = data.candidates?.[0];
-  if (!candidate || !candidate.content?.parts) {
-    console.warn('[Gemini] Invalid response structure:', data);
-    return [{ text: "Maaf, saya tidak menerima respons yang valid dari Gemini. Coba lagi." }];
-  }
-
-  return candidate.content.parts;
 }
 
-// DIPERBAIKI: Handler untuk Ollama (Llama & DeepSeek)
+// PERBAIKAN: Handler untuk Ollama dengan timeout
 async function handleOllamaRequest(history: any[], systemPrompt: string, model: 'llama' | 'deepseek') {
   const modelName = model === 'llama' ? LLAMA_MODEL_NAME : DEEPSEEK_MODEL_NAME;
 
-  // PERBAIKAN: Gabungkan history menjadi satu prompt yang koheren
+  // Gabungkan history menjadi satu prompt
   let fullPrompt = `${systemPrompt}\n\n`;
   fullPrompt += "=== RIWAYAT PERCAKAPAN ===\n";
 
-  history.forEach((msg, index) => {
+  history.forEach((msg) => {
     const roleLabel = msg.role === 'user' ? 'USER' : 'ASSISTANT';
     fullPrompt += `${roleLabel}: ${msg.parts[0].text}\n`;
   });
 
   fullPrompt += "\nJawab dalam format JSON yang valid sesuai instruksi di atas.";
 
-  console.log(`[Ollama ${model}] Sending request...`);
-  console.log(`[Ollama ${model}] Prompt length: ${fullPrompt.length} characters`);
+  console.log(`[Ollama ${model}] Sending request to ${OLLAMA_API_URL}...`);
 
   const payload = {
     model: modelName,
@@ -107,84 +119,105 @@ async function handleOllamaRequest(history: any[], systemPrompt: string, model: 
     options: {
       temperature: 0.7,
       top_p: 0.9,
+      num_predict: 2048,
     }
   };
 
-  const response = await fetch(OLLAMA_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    console.error(`[Ollama ${model}] API Error:`, errorBody);
-    throw new Error(`Ollama API request failed with status ${response.status}: ${errorBody}`);
-  }
-
-  const responseData = await response.json();
-  const rawResponse = responseData.response;
-
-  console.log(`[Ollama ${model}] Raw response:`, rawResponse);
-
-  // PERBAIKAN: Parsing JSON yang lebih robust
   try {
-    // Coba ekstrak JSON dari response
-    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      console.warn(`[Ollama ${model}] No JSON found in response, treating as text`);
-      return [{ text: rawResponse || "Maaf, saya tidak dapat memproses permintaan ini." }];
+    // Add timeout untuk fetch
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+    const response = await fetch(OLLAMA_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`[Ollama ${model}] API Error:`, errorBody);
+      throw new Error(`Ollama API request failed with status ${response.status}: ${errorBody}`);
     }
 
-    const parsedJson = JSON.parse(jsonMatch[0]);
-    console.log(`[Ollama ${model}] Parsed JSON:`, parsedJson);
+    const responseData = await response.json();
+    const rawResponse = responseData.response;
 
-    // Cek apakah ada tool_calls
-    if (parsedJson.tool_calls && Array.isArray(parsedJson.tool_calls)) {
-      console.log(`[Ollama ${model}] Function calls detected:`, parsedJson.tool_calls.length);
-      return parsedJson.tool_calls.map((call: { name: string; args: any }) => ({
-        functionCall: { name: call.name, args: call.args }
-      }));
-    }
-    // Cek format alternatif (name & args langsung)
-    else if (parsedJson.name && parsedJson.args) {
-      console.log(`[Ollama ${model}] Single function call detected: ${parsedJson.name}`);
-      return [{ functionCall: { name: parsedJson.name, args: parsedJson.args } }];
-    }
-    // Respons teks
-    else if (parsedJson.text_response) {
-      console.log(`[Ollama ${model}] Text response detected`);
-      return [{ text: parsedJson.text_response }];
-    }
+    console.log(`[Ollama ${model}] Raw response received`);
 
-    // Fallback: tidak ada format yang dikenali
-    console.warn(`[Ollama ${model}] Unrecognized JSON format:`, parsedJson);
-    return [{ text: "Maaf, saya tidak yakin bagaimana harus merespons." }];
+    // Parsing JSON yang lebih robust
+    try {
+      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.warn(`[Ollama ${model}] No JSON found in response, treating as text`);
+        return [{ text: rawResponse || "Maaf, saya tidak dapat memproses permintaan ini." }];
+      }
 
-  } catch (e) {
-    console.error(`[Ollama ${model}] Failed to parse JSON:`, e);
-    console.error(`[Ollama ${model}] Raw response was:`, rawResponse);
-    // Fallback: kembalikan sebagai teks
-    return [{ text: rawResponse || "Maaf, terjadi kesalahan dalam memproses respons." }];
+      const parsedJson = JSON.parse(jsonMatch[0]);
+      console.log(`[Ollama ${model}] Parsed JSON successfully`);
+
+      // Cek tool_calls
+      if (parsedJson.tool_calls && Array.isArray(parsedJson.tool_calls)) {
+        return parsedJson.tool_calls.map((call: { name: string; args: any }) => ({
+          functionCall: { name: call.name, args: call.args }
+        }));
+      }
+      // Cek format alternatif
+      else if (parsedJson.name && parsedJson.args) {
+        return [{ functionCall: { name: parsedJson.name, args: parsedJson.args } }];
+      }
+      // Respons teks
+      else if (parsedJson.text_response) {
+        return [{ text: parsedJson.text_response }];
+      }
+
+      // Fallback
+      console.warn(`[Ollama ${model}] Unrecognized JSON format`);
+      return [{ text: "Maaf, saya tidak yakin bagaimana harus merespons." }];
+
+    } catch (parseError) {
+      console.error(`[Ollama ${model}] Failed to parse JSON:`, parseError);
+      return [{ text: rawResponse || "Maaf, terjadi kesalahan dalam memproses respons." }];
+    }
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      console.error(`[Ollama ${model}] Request timeout after 60 seconds`);
+      throw new Error('Request to Ollama timed out. Please try again.');
+    }
+    console.error(`[Ollama ${model}] Fetch error:`, error);
+    throw new Error(`Failed to connect to Ollama: ${error.message}. Make sure Ollama is running at ${OLLAMA_API_URL}`);
   }
 }
 
-// DIPERBAIKI: Main API handler
+// PERBAIKAN: Main API handler dengan better error handling
 export async function POST(req: Request) {
   try {
-    const { history, model, systemPrompt } = await req.json();
+    const body = await req.json();
+    const { history, model, systemPrompt } = body;
 
-    // Validasi input
+    // Validasi input lebih detail
     if (!history || !Array.isArray(history)) {
-      return NextResponse.json({ error: 'Invalid history format' }, { status: 400 });
+      return NextResponse.json({
+        error: 'Invalid history format. Expected an array.',
+        received: typeof history
+      }, { status: 400 });
     }
 
     if (!model || !['gemini', 'llama', 'deepseek'].includes(model)) {
-      return NextResponse.json({ error: 'Invalid model specified' }, { status: 400 });
+      return NextResponse.json({
+        error: 'Invalid model specified. Must be one of: gemini, llama, deepseek',
+        received: model
+      }, { status: 400 });
     }
 
     if (!systemPrompt || typeof systemPrompt !== 'string') {
-      return NextResponse.json({ error: 'Invalid system prompt' }, { status: 400 });
+      return NextResponse.json({
+        error: 'Invalid system prompt. Expected a non-empty string.',
+        received: typeof systemPrompt
+      }, { status: 400 });
     }
 
     console.log(`[AI API] Processing request for model: ${model}`);
@@ -198,13 +231,35 @@ export async function POST(req: Request) {
     }
 
     console.log(`[AI API] Returning ${parts.length} part(s)`);
-    return NextResponse.json({ parts });
+    return NextResponse.json({ parts }, { status: 200 });
 
   } catch (error: any) {
     console.error('[AI API] Error:', error);
+
+    // Tentukan status code berdasarkan jenis error
+    let statusCode = 500;
+    if (error.message.includes('not configured') || error.message.includes('not found')) {
+      statusCode = 503; // Service Unavailable
+    } else if (error.message.includes('timeout')) {
+      statusCode = 504; // Gateway Timeout
+    }
+
     return NextResponse.json({
       error: error.message || 'An unexpected error occurred',
+      type: error.name,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    }, { status: 500 });
+    }, { status: statusCode });
   }
+}
+
+// Tambahkan OPTIONS handler untuk CORS
+export async function OPTIONS(req: Request) {
+  return NextResponse.json({}, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    }
+  });
 }

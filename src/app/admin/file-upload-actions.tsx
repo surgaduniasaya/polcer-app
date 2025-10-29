@@ -244,9 +244,14 @@ async function bulkAddUsers(
       }
 
       // Check if user already exists in auth
-      const { data: existingAuthUserList } = await supabase.auth.admin.listUsers({
-        email: user.email
-      });
+      const { data: existingAuthUserList, error: listError } = await supabase.auth.admin.listUsers();
+
+      if (listError) {
+        errors.push(`User ${user.email}: Gagal memeriksa user di Auth - ${listError.message}`);
+        skippedCount++;
+        continue;
+      }
+      
       const existingAuthUser = existingAuthUserList?.users?.[0];
 
       let userId: string;
