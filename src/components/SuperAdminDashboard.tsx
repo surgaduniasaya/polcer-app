@@ -423,8 +423,19 @@ export default function SuperAdminDashboard({
                     {msg.role === 'user' ? (
                       <p className="whitespace-pre-wrap">{msg.content}</p>
                     ) : (
-                      <div className="prose prose-sm max-w-none prose-p:my-2 prose-headings:my-3 prose-li:my-1">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <div className="prose prose-sm max-w-none">
+                        <ReactMarkdown
+                          components={{
+                            p: ({ node, ...props }) => <p className="my-2" {...props} />,
+                            h1: ({ node, ...props }) => <h1 className="my-3" {...props} />,
+                            h2: ({ node, ...props }) => <h2 className="my-3" {...props} />,
+                            h3: ({ node, ...props }) => <h3 className="my-3" {...props} />,
+                            li: ({ node, ...props }) => <li className="my-1" {...props} />
+                          }}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
+
                         {msg.response?.tables && msg.response.tables.map((table, tableIndex) => (
                           <div key={tableIndex} className="mt-4 overflow-hidden rounded-lg border bg-white shadow-sm not-prose">
                             {table.title && <h4 className="font-semibold text-base p-3 border-b bg-gray-50">{table.title}</h4>}
@@ -440,19 +451,41 @@ export default function SuperAdminDashboard({
                                   {table.data.map((row, rowIndex) => (
                                     <TableRow key={rowIndex} className="hover:bg-gray-50 transition-colors">
                                       {Object.values(row).map((cell: any, cellIndex: number) => (
-                                        <TableCell key={cellIndex} className="px-3 py-2 text-sm text-gray-700">{cell !== null && cell !== undefined ? String(cell) : '-'}</TableCell>
+                                        <TableCell key={cellIndex} className="px-3 py-2 text-sm text-gray-700">
+                                          {cell !== null && cell !== undefined ? String(cell) : '-'}
+                                        </TableCell>
                                       ))}
                                     </TableRow>
                                   ))}
                                   {table.data.length === 0 && (
-                                    <TableRow><TableCell colSpan={Object.keys(table.data[0] || {}).length || 1} className="text-center text-gray-500 py-4">Tidak ada data.</TableCell></TableRow>
+                                    <TableRow>
+                                      <TableCell colSpan={Object.keys(table.data[0] || {}).length || 1} className="text-center text-gray-500 py-4">
+                                        Tidak ada data.
+                                      </TableCell>
+                                    </TableRow>
                                   )}
                                 </TableBody>
                               </Table>
                             </div>
                           </div>
                         ))}
-                        {msg.response?.outroText && <ReactMarkdown className="mt-2">{msg.response.outroText}</ReactMarkdown>}
+
+                        {/* PERBAIKAN: Gunakan wrapper div untuk outroText */}
+                        {msg.response?.outroText && (
+                          <div className="mt-2">
+                            <ReactMarkdown
+                              components={{
+                                p: ({ node, ...props }) => <p className="my-2" {...props} />,
+                                h1: ({ node, ...props }) => <h1 className="my-3" {...props} />,
+                                h2: ({ node, ...props }) => <h2 className="my-3" {...props} />,
+                                h3: ({ node, ...props }) => <h3 className="my-3" {...props} />,
+                                li: ({ node, ...props }) => <li className="my-1" {...props} />
+                              }}
+                            >
+                              {msg.response.outroText}
+                            </ReactMarkdown>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
